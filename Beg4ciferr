@@ -1331,8 +1331,9 @@ local function esc(s)
 	return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
-local function addChat(name, text, mine)
+local function addChat(name, text, mine, ts)
 	chatCount += 1
+	local when = ts and ('<font color="#8c9694">[%s]</font> '):format(os.date("%m/%d %H:%M:%S", ts)) or ""
 	local l = new("TextLabel", {
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Size = UDim2.new(1, -4, 0, 0),
@@ -1345,7 +1346,7 @@ local function addChat(name, text, mine)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Top,
 		LayoutOrder = chatCount,
-		Text = ('<font color="%s">%s</font>  %s'):format(mine and "#39ff6a" or "#ff8a20", esc(name), esc(text)),
+		Text = ('%s<font color="%s">%s</font>  %s'):format(when, mine and "#39ff6a" or "#ff8a20", esc(name), esc(text)),
 	}, chatLog)
 	chatRows[#chatRows + 1] = l
 	if #chatRows > 60 then
@@ -1381,7 +1382,38 @@ elseif RELAY_URL:find("your%-relay") then
 	relayReady = false
 	addChat("info", "set RELAY_URL and RELAY_KEY at the top of the chat section.", false)
 else
-	addChat("info", "private chat. only people running this script in the same room see it.", false)
+	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt.", false)
+end
+
+-- everything new lives in chatRows.bc (a table), because the script is at lua's 200 local limit
+chatRows.bc = {
+	LOG_FILE = "beg4ciferr_chat_log.txt",
+	PRESENCE = "::bc4presence::",
+	PRESENCE_EVERY = 20,
+	PRESENCE_TTL = 60,
+	TAG_TEXT = "beg4ciferr",
+	users = {}, -- [userId] = os.clock() of last announce
+	tags = {},  -- [userId] = BillboardGui
+	first = true,
+}
+
+function chatRows.bc.save(name, text, ts)
+	local b = chatRows.bc
+	local line = ("[%s] %s: %s\n"):format(os.date("%Y-%m-%d %H:%M:%S", ts), name, (text:gsub("[\r\n]+", " ")))
+	pcall(function()
+		if appendfile then
+			appendfile(b.LOG_FILE, line)
+		elseif writefile and readfile and isfile then
+			local old = isfile(b.LOG_FILE) and readfile(b.LOG_FILE) or ""
+			writefile(b.LOG_FILE, old .. line)
+		end
+	end)
+end
+
+function chatRows.bc.msgTime(m)
+	local t = tonumber(m.ts or m.time or m.t or m.timestamp)
+	if t and t > 1e12 then t = t / 1000 end
+	return t and math.floor(t) or os.time()
 end
 
 local lastId, polling, connected = 0, false, false
@@ -1397,12 +1429,23 @@ local function pollOnce()
 		for _, m in ipairs(data.messages) do
 			if m.id > lastId then
 				lastId = m.id
-				addChat(tostring(m.name), tostring(m.text), m.uid == lp.UserId)
-				if not pageChat.Visible then
-					status(tostring(m.name) .. ": " .. tostring(m.text))
+				local b = chatRows.bc
+				local txt = tostring(m.text)
+				if txt:sub(1, #b.PRESENCE) == b.PRESENCE then
+					if not b.first and m.uid ~= lp.UserId then
+						b.users[m.uid] = os.clock()
+					end
+				else
+					local ts = b.msgTime(m)
+					addChat(tostring(m.name), txt, m.uid == lp.UserId, ts)
+					b.save(tostring(m.name), txt, ts)
+					if not pageChat.Visible and not b.first then
+						status(tostring(m.name) .. ": " .. txt)
+					end
 				end
 			end
 		end
+		chatRows.bc.first = false
 	elseif connected then
 		connected = false
 		status("chat lost connection")
@@ -1456,6 +1499,65 @@ actionBtn(pageChat, "send", UDim2.fromOffset(70, 30), UDim2.new(1, -78, 1, -38),
 end)
 chatBox.FocusLost:Connect(function(enter)
 	if enter then sendChat() end
+end)
+
+task.spawn(function()
+	local b = chatRows.bc
+	while true do
+		if relayReady then
+			call("POST", "/send", { room = room, name = lp.DisplayName, uid = lp.UserId, text = b.PRESENCE })
+		end
+		task.wait(b.PRESENCE_EVERY)
+	end
+end)
+
+function chatRows.bc.makeTag(head)
+	local bb = new("BillboardGui", {
+		Name = "beg4ciferr_tag",
+		Adornee = head,
+		AlwaysOnTop = true,
+		Size = UDim2.fromOffset(130, 26),
+		StudsOffsetWorldSpace = Vector3.new(0, 2.8, 0),
+		MaxDistance = 250,
+		ResetOnSpawn = false,
+	}, gui)
+	local lbl = new("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = chatRows.bc.TAG_TEXT,
+		Font = F_TITLE,
+		TextSize = 14,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextStrokeColor3 = Color3.new(0, 0, 0),
+		TextStrokeTransparency = 0.3,
+	}, bb)
+	new("UIGradient", { Color = TITLE_COLORS }, lbl)
+	return bb
+end
+
+task.spawn(function()
+	local b = chatRows.bc
+	while true do
+		for uid, bb in pairs(b.tags) do
+			local pl = Players:GetPlayerByUserId(uid)
+			local seen = b.users[uid]
+			local head = pl and pl.Character and pl.Character:FindFirstChild("Head")
+			if not (seen and os.clock() - seen < b.PRESENCE_TTL and head) then
+				bb:Destroy()
+				b.tags[uid] = nil
+			elseif bb.Adornee ~= head then
+				bb.Adornee = head
+			end
+		end
+		for uid, seen in pairs(b.users) do
+			if os.clock() - seen < b.PRESENCE_TTL and not b.tags[uid] then
+				local pl = Players:GetPlayerByUserId(uid)
+				local head = pl and pl.Character and pl.Character:FindFirstChild("Head")
+				if head then b.tags[uid] = b.makeTag(head) end
+			end
+		end
+		task.wait(1)
+	end
 end)
 
 -- loops -------------------------------------------------------------
