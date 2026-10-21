@@ -1,152 +1,115 @@
+-- beg4ciferr · halloween edition
 -- localscript, goes in StarterPlayerScripts
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local VirtualUser = game:GetService("VirtualUser")
+local TeleportService = game:GetService("TeleportService")
+local Stats = game:GetService("Stats")
 local lp = Players.LocalPlayer
+local joined = os.clock()
 
+-- settings ----------------------------------------------------------
 local NAME = "Coin_Server"
 local MIN_SPEED, MAX_SPEED = 5, 100
 local SPIN_DEG = 720
 local IGNORE_TIME = 5          -- secs a grabbed coin gets skipped
-local ABOVE = Vector3.new(0, 1, 0)
-local DEPTH = 8                -- how far under the coin you travel
-local TOUCH_Y = -1             -- height vs coin when grabbing it underground
-local NEAR = 4                 -- horizontal range where you rise to grab
+local ABOVE = Vector3.new(0, 1, 0)   -- stop point over a coin when under is off
+local DEPTH = 14               -- how far under the coin you cruise
+local NEAR = 3                 -- horizontal range where you rise to grab
+local BODY_HALF = 0.6          -- half thickness of you lying down
+local OVERLAP = 0.25           -- how far your back pokes into the coin
+local DWELL = 0.12             -- max hold on a coin (ends early when it vanishes)
+local ARRIVE = 0.6
+local EASE = 14                -- bigger = brakes later
+local ACCEL = 14               -- bigger = snappier turns
+local SLOW = 8                 -- slowest crawl while braking
 
+local FLING_SPEED = 90         -- sideways studs/s that counts as a fling
+local FLING_UP = 120
+local FLING_SPIN = 40
+local DANGER_DIST = 35         -- knife warning range (needs role esp on)
+local ESP_TEXT = 11
+
+local F_TITLE = Enum.Font.Michroma
+local F = Enum.Font.RobotoMono
+
+-- state -------------------------------------------------------------
 local speed = 40
-local tpOn, spinOn, underOn = false, false, false
+local walkVal, jumpVal, flyVal, fovVal, gravVal = 32, 70, 50, 70, 80
+local tpOn, spinOn, underOn, flingOn, espOn, voidOn = false, false, false, false, false, false
+local afkOn, brightOn, spookyOn, camOn, zoomOn, gfxOn, xrayOn, namesOn = false, false, false, false, false, false, false, false
+local noclipOn, infJumpOn, walkOn, jumpOn, flyOn, fovOn, gravOn = false, false, false, false, false, false, false
+local origWalk, origJump, origJumpH, origFov, origGrav
+local homeCF, lastGround
 local wentUnder, wasLay = false, false
 local yaw = 0
-local target, targetGoal
+local vel = Vector3.zero
+local flyVel = Vector3.zero
+local target, targetGoal, targetAt, targetLimit, dwellUntil, deepY, surfY
+local rising = false
+local safeCF
 local coins = {}
 local ignored = setmetatable({}, { __mode = "k" })
+local myParts, otherParts = {}, {}
+local esp = {}
+local origMaxZoom = lp.CameraMaxZoomDistance
 
-local ACCENT = Color3.fromRGB(190, 40, 60)
-local BG = Color3.fromRGB(14, 14, 16)
-local OFF = Color3.fromRGB(28, 28, 32)
-local DIM = Color3.fromRGB(170, 170, 175)
+-- toggles that other code needs to flip (filled in when the pages are built)
+local tpT, spinT, underT, flyT, brightT, spookyT
 
--- gui
-local gui = Instance.new("ScreenGui")
-gui.Name = "beg4ciferr"
-gui.ResetOnSpawn = false
-gui.Parent = lp:WaitForChild("PlayerGui")
+-- colors: black + green, with a little pumpkin orange + purple -------
+local GREEN = Color3.fromRGB(57, 255, 106)
+local GREEN_LIGHT = Color3.fromRGB(190, 255, 205)
+local GREEN_DARK = Color3.fromRGB(14, 70, 34)
+local PUMPKIN = Color3.fromRGB(255, 138, 32)
+local PURPLE = Color3.fromRGB(140, 80, 220)
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 190, 0, 108)
-frame.Position = UDim2.new(0, 15, 0.5, -54)
-frame.BackgroundColor3 = BG
-frame.BorderSizePixel = 0
-frame.Parent = gui
+local ROW = Color3.fromRGB(22, 19, 29)
+local ROW_HOVER = Color3.fromRGB(29, 25, 38)
+local ROW_ON = Color3.fromRGB(14, 40, 26)
+local LINE = Color3.fromRGB(42, 36, 54)
+local SW_OFF = Color3.fromRGB(48, 43, 60)
+local DIM = Color3.fromRGB(140, 150, 148)
+local TXT = Color3.fromRGB(222, 255, 232)
+local FLASH = Color3.fromRGB(24, 90, 48)
 
-local stroke = Instance.new("UIStroke")
-stroke.Color = ACCENT
-stroke.Thickness = 1
-stroke.Parent = frame
+local RED = Color3.fromRGB(255, 60, 60)
+local BLUE = Color3.fromRGB(60, 140, 255)
+local ROLE_GREEN = Color3.fromRGB(70, 230, 110)
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 22)
-title.BackgroundTransparency = 1
-title.Text = "beg4ciferr"
-title.Font = Enum.Font.Code
-title.TextSize = 13
-title.TextColor3 = ACCENT
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = frame
-Instance.new("UIPadding", title).PaddingLeft = UDim.new(0, 8)
-
-local sep = Instance.new("Frame")
-sep.Size = UDim2.new(1, 0, 0, 1)
-sep.Position = UDim2.new(0, 0, 0, 22)
-sep.BackgroundColor3 = ACCENT
-sep.BackgroundTransparency = 0.6
-sep.BorderSizePixel = 0
-sep.Parent = frame
-
-local function btn(text, i)
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(1 / 3, -8, 0, 22)
-	b.Position = UDim2.new(i / 3, 6 - 2 * i, 0, 29)
-	b.Text = text
-	b.Font = Enum.Font.Code
-	b.TextSize = 12
-	b.TextColor3 = DIM
-	b.BackgroundColor3 = OFF
-	b.BorderSizePixel = 0
-	b.AutoButtonColor = false
-	b.Parent = frame
-	return b
+-- small helpers -----------------------------------------------------
+local function new(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do
+		o[k] = v
+	end
+	if parent then o.Parent = parent end
+	return o
 end
 
-local tpBtn = btn("tp", 0)
-local spinBtn = btn("spin", 1)
-local underBtn = btn("under", 2)
-
-local function setOn(b, on)
-	b.BackgroundColor3 = on and ACCENT or OFF
-	b.TextColor3 = on and Color3.new(1, 1, 1) or DIM
+local function corner(o, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r)
+	c.Parent = o
+	return c
 end
 
-local function txt(y, size)
-	local l = Instance.new("TextLabel")
-	l.Size = UDim2.new(1, -16, 0, size + 2)
-	l.Position = UDim2.new(0, 8, 0, y)
-	l.BackgroundTransparency = 1
-	l.Font = Enum.Font.Code
-	l.TextSize = size
-	l.TextColor3 = DIM
-	l.TextXAlignment = Enum.TextXAlignment.Left
-	l.Parent = frame
-	return l
+-- always a border stroke (on buttons the default would outline the text instead)
+local function stroke(o, color, th)
+	local s = Instance.new("UIStroke")
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Color = color
+	s.Thickness = th or 1
+	s.Parent = o
+	return s
 end
 
-local speedLabel = txt(57, 11)
-local leftLabel = txt(90, 12)
-leftLabel.Text = "left: 0"
-
--- slider
-local area = Instance.new("Frame")
-area.Size = UDim2.new(1, -16, 0, 16)
-area.Position = UDim2.new(0, 8, 0, 70)
-area.BackgroundTransparency = 1
-area.Parent = frame
-
-local track = Instance.new("Frame")
-track.Size = UDim2.new(1, 0, 0, 2)
-track.Position = UDim2.new(0, 0, 0.5, -1)
-track.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
-track.BorderSizePixel = 0
-track.Parent = area
-
-local fill = Instance.new("Frame")
-fill.BackgroundColor3 = ACCENT
-fill.BorderSizePixel = 0
-fill.Parent = track
-
-local knob = Instance.new("Frame")
-knob.Size = UDim2.new(0, 6, 0, 14)
-knob.AnchorPoint = Vector2.new(0.5, 0.5)
-knob.BackgroundColor3 = Color3.fromRGB(235, 235, 235)
-knob.BorderSizePixel = 0
-knob.Parent = area
-
-local function refreshSlider()
-	local a = (speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED)
-	fill.Size = UDim2.new(a, 0, 1, 0)
-	knob.Position = UDim2.new(a, 0, 0.5, 0)
-	speedLabel.Text = ("speed: %d studs/s"):format(speed)
+local function tween(o, t, props)
+	TweenService:Create(o, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play()
 end
-
-local function setFromX(x)
-	local a = math.clamp((x - area.AbsolutePosition.X) / area.AbsoluteSize.X, 0, 1)
-	speed = math.floor(MIN_SPEED + a * (MAX_SPEED - MIN_SPEED) + 0.5)
-	refreshSlider()
-end
-refreshSlider()
-
--- input (slider + dragging the window by its title)
-local sliding, moving = false, false
-local dragStart, startPos
 
 local function isPress(i)
 	return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch
@@ -155,44 +118,666 @@ local function isMove(i)
 	return i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch
 end
 
-area.InputBegan:Connect(function(i)
-	if isPress(i) then
-		sliding = true
-		setFromX(i.Position.X)
+-- window ------------------------------------------------------------
+local W, H = 390, 310
+local TOP, FOOT, SIDE = 34, 24, 86
+
+local gui = new("ScreenGui", {
+	Name = "beg4ciferr",
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+gui.Parent = lp:WaitForChild("PlayerGui")
+
+-- root holds the shadow + window so they move and resize together
+local root = new("Frame", {
+	Name = "root",
+	Size = UDim2.fromOffset(W, H),
+	Position = UDim2.new(0, 15, 0.5, -H / 2),
+	BackgroundTransparency = 1,
+}, gui)
+
+local shadow2 = new("Frame", {
+	Size = UDim2.new(1, 28, 1, 28),
+	Position = UDim2.fromOffset(-14, -8),
+	BackgroundColor3 = Color3.new(0, 0, 0),
+	BackgroundTransparency = 0.86,
+	BorderSizePixel = 0,
+}, root)
+corner(shadow2, 22)
+local shadow1 = new("Frame", {
+	Size = UDim2.new(1, 12, 1, 12),
+	Position = UDim2.fromOffset(-6, -2),
+	BackgroundColor3 = Color3.new(0, 0, 0),
+	BackgroundTransparency = 0.7,
+	BorderSizePixel = 0,
+}, root)
+corner(shadow1, 14)
+
+local frame = new("Frame", {
+	Name = "window",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.new(1, 1, 1),
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+}, root)
+corner(frame, 10)
+new("UIGradient", {
+	Rotation = 90,
+	Color = ColorSequence.new(Color3.fromRGB(21, 16, 28), Color3.fromRGB(5, 4, 8)),
+}, frame)
+
+-- outline: green with a pumpkin glow that sweeps around
+local outline = stroke(frame, Color3.new(1, 1, 1), 1.5)
+local outlineGrad = new("UIGradient", {
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, GREEN),
+		ColorSequenceKeypoint.new(0.35, GREEN_DARK),
+		ColorSequenceKeypoint.new(0.62, PUMPKIN),
+		ColorSequenceKeypoint.new(0.82, GREEN_DARK),
+		ColorSequenceKeypoint.new(1, GREEN),
+	}),
+}, outline)
+TweenService:Create(outlineGrad, TweenInfo.new(5, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), { Rotation = 360 }):Play()
+
+-- title bar (the whole bar is the drag handle)
+local bar = new("TextButton", {
+	Size = UDim2.new(1, -70, 0, TOP),
+	BackgroundTransparency = 1,
+	Text = "",
+	AutoButtonColor = false,
+}, frame)
+
+new("TextLabel", {
+	Size = UDim2.fromOffset(24, TOP),
+	Position = UDim2.fromOffset(9, 0),
+	BackgroundTransparency = 1,
+	Text = "🎃",
+	TextSize = 16,
+	Font = F,
+}, frame)
+
+local TITLE_COLORS = ColorSequence.new(PUMPKIN, GREEN)
+local title = new("TextLabel", {
+	AutomaticSize = Enum.AutomaticSize.X,
+	Size = UDim2.new(0, 0, 0, TOP),
+	Position = UDim2.fromOffset(35, 0),
+	BackgroundTransparency = 1,
+	Text = "beg4ciferr_",
+	Font = F_TITLE,
+	TextSize = 13,
+	TextColor3 = Color3.new(1, 1, 1),
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, frame)
+local titleGrad = new("UIGradient", { Color = TITLE_COLORS }, title)
+
+local function topButton(text, x)
+	local b = new("TextButton", {
+		Size = UDim2.fromOffset(24, 20),
+		Position = UDim2.new(1, x, 0, 7),
+		Text = text,
+		Font = F,
+		TextSize = 15,
+		TextColor3 = DIM,
+		BackgroundColor3 = ROW,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+	}, frame)
+	corner(b, 5)
+	stroke(b, LINE, 1)
+	b.MouseEnter:Connect(function() tween(b, 0.1, { TextColor3 = PUMPKIN }) end)
+	b.MouseLeave:Connect(function() tween(b, 0.1, { TextColor3 = DIM }) end)
+	return b
+end
+local closeBtn = topButton("×", -32)
+local miniBtn = topButton("–", -60)
+
+new("Frame", {
+	Size = UDim2.new(1, 0, 0, 1),
+	Position = UDim2.fromOffset(0, TOP - 1),
+	BackgroundColor3 = LINE,
+	BorderSizePixel = 0,
+}, frame)
+
+-- body: sidebar + pages + footer (hidden while minimized)
+local body = new("Frame", {
+	Position = UDim2.fromOffset(0, TOP),
+	Size = UDim2.new(1, 0, 1, -TOP),
+	BackgroundTransparency = 1,
+	ClipsDescendants = true,
+}, frame)
+
+new("Frame", {
+	Size = UDim2.new(0, SIDE, 1, -FOOT),
+	BackgroundColor3 = Color3.new(0, 0, 0),
+	BackgroundTransparency = 0.6,
+	BorderSizePixel = 0,
+}, body)
+new("Frame", {
+	Size = UDim2.new(0, 1, 1, -FOOT),
+	Position = UDim2.fromOffset(SIDE, 0),
+	BackgroundColor3 = LINE,
+	BorderSizePixel = 0,
+}, body)
+
+local TAB_NAMES = { "farm", "move", "view", "tools", "chat" }
+local tabBtns = {}
+for i, name in ipairs(TAB_NAMES) do
+	local t = new("TextButton", {
+		Size = UDim2.new(0, SIDE, 0, 32),
+		Position = UDim2.fromOffset(0, 8 + (i - 1) * 36),
+		BackgroundTransparency = 1,
+		Text = name,
+		Font = F,
+		TextSize = 13,
+		TextColor3 = DIM,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		AutoButtonColor = false,
+	}, body)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 16) }, t)
+	tabBtns[i] = t
+end
+
+local marker = new("Frame", {
+	Size = UDim2.fromOffset(3, 18),
+	Position = UDim2.fromOffset(0, 15),
+	BackgroundColor3 = PUMPKIN,
+	BorderSizePixel = 0,
+}, body)
+corner(marker, 2)
+
+-- pages are scrolling lists, so nothing overlaps and adding rows is easy
+local layoutOrder = 0
+local function nextOrd()
+	layoutOrder += 1
+	return layoutOrder
+end
+
+local function newPage()
+	local p = new("ScrollingFrame", {
+		Position = UDim2.fromOffset(SIDE + 1, 0),
+		Size = UDim2.new(1, -(SIDE + 1), 1, -FOOT),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = PUMPKIN,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false,
+	}, body)
+	new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+	new("UIPadding", {
+		PaddingTop = UDim.new(0, 8),
+		PaddingBottom = UDim.new(0, 8),
+		PaddingLeft = UDim.new(0, 8),
+		PaddingRight = UDim.new(0, 10),
+	}, p)
+	return p
+end
+local pageFarm, pageMove, pageView, pageTools = newPage(), newPage(), newPage(), newPage()
+
+-- chat page: message log on top, input + send at the bottom
+local sendChat -- defined in the chat section further down
+local pageChat = new("Frame", {
+	Position = UDim2.fromOffset(SIDE + 1, 0),
+	Size = UDim2.new(1, -(SIDE + 1), 1, -FOOT),
+	BackgroundTransparency = 1,
+	Visible = false,
+}, body)
+local chatLog = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(8, 8),
+	Size = UDim2.new(1, -18, 1, -54),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 3,
+	ScrollBarImageColor3 = PUMPKIN,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, pageChat)
+new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, chatLog)
+local chatBox = new("TextBox", {
+	Size = UDim2.new(1, -86, 0, 30),
+	Position = UDim2.new(0, 8, 1, -38),
+	BackgroundColor3 = ROW,
+	BorderSizePixel = 0,
+	Text = "",
+	PlaceholderText = "say something...",
+	PlaceholderColor3 = DIM,
+	TextColor3 = TXT,
+	Font = F,
+	TextSize = 12,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	ClearTextOnFocus = false,
+}, pageChat)
+corner(chatBox, 6)
+stroke(chatBox, LINE, 1)
+new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chatBox)
+
+local pages = { pageFarm, pageMove, pageView, pageTools, pageChat }
+
+local function selectTab(n)
+	for i, p in ipairs(pages) do
+		p.Visible = (i == n)
 	end
+	for i, t in ipairs(tabBtns) do
+		t.TextColor3 = (i == n) and GREEN_LIGHT or DIM
+	end
+	tween(marker, 0.18, { Position = UDim2.fromOffset(0, 15 + (n - 1) * 36) })
+end
+for i, t in ipairs(tabBtns) do
+	t.Activated:Connect(function()
+		selectTab(i)
+	end)
+end
+selectTab(1)
+
+-- footer: status line + session timer
+new("Frame", {
+	Size = UDim2.new(1, 0, 0, 1),
+	Position = UDim2.new(0, 0, 1, -FOOT),
+	BackgroundColor3 = LINE,
+	BorderSizePixel = 0,
+}, body)
+
+local function footText(x, w, align, color)
+	return new("TextLabel", {
+		Size = UDim2.new(w, -12, 0, FOOT - 3),
+		Position = UDim2.new(x, x == 0 and 10 or 0, 1, -FOOT + 2),
+		BackgroundTransparency = 1,
+		Font = F,
+		TextSize = 11,
+		TextColor3 = color,
+		TextXAlignment = align,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, body)
+end
+local statusLabel = footText(0, 0.62, Enum.TextXAlignment.Left, DIM)
+local timeLabel = footText(0.62, 0.38, Enum.TextXAlignment.Right, GREEN)
+statusLabel.Text = "ready"
+
+local statusToken = 0
+local function status(msg)
+	statusToken += 1
+	local mine = statusToken
+	statusLabel.Text = msg
+	task.delay(6, function()
+		if mine == statusToken then
+			statusLabel.Text = "ready"
+		end
+	end)
+end
+
+-- floating pumpkin: tap to show / hide the window, drag to move it
+local pump = new("TextButton", {
+	Name = "pumpkin",
+	Size = UDim2.fromOffset(42, 42),
+	Position = UDim2.fromOffset(15, 15),
+	BackgroundColor3 = Color3.fromRGB(21, 16, 28),
+	Text = "🎃",
+	TextSize = 22,
+	Font = F,
+	AutoButtonColor = false,
+}, gui)
+corner(pump, 21)
+local pumpStroke = stroke(pump, PUMPKIN, 2)
+
+-- drag (window + pumpkin), kept on screen
+local function clampPos(px, size)
+	local vp = gui.AbsoluteSize
+	return Vector2.new(
+		math.clamp(px.X, 0, math.max(0, vp.X - size.X)),
+		math.clamp(px.Y, 0, math.max(0, vp.Y - size.Y))
+	)
+end
+
+local function makeDraggable(handle, targetGui, onTap)
+	local down, moved, start, origin = false, false, nil, nil
+	handle.InputBegan:Connect(function(i)
+		if isPress(i) then
+			down, moved, start = true, false, i.Position
+			local p, vp = targetGui.Position, gui.AbsoluteSize
+			origin = Vector2.new(p.X.Scale * vp.X + p.X.Offset, p.Y.Scale * vp.Y + p.Y.Offset)
+		end
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if down and isMove(i) then
+			local d = i.Position - start
+			if not moved and d.Magnitude < 5 then return end
+			moved = true
+			local np = clampPos(origin + Vector2.new(d.X, d.Y), targetGui.AbsoluteSize)
+			targetGui.Position = UDim2.fromOffset(np.X, np.Y)
+		end
+	end)
+	UIS.InputEnded:Connect(function(i)
+		if down and isPress(i) then
+			down = false
+			if not moved and onTap then onTap() end
+		end
+	end)
+end
+
+makeDraggable(bar, root)
+makeDraggable(pump, pump, function()
+	root.Visible = not root.Visible
+end)
+closeBtn.Activated:Connect(function()
+	root.Visible = false
 end)
 
-title.InputBegan:Connect(function(i)
-	if isPress(i) then
-		moving = true
-		dragStart = i.Position
-		startPos = frame.Position
-	end
+local collapsed = false
+miniBtn.Activated:Connect(function()
+	collapsed = not collapsed
+	miniBtn.Text = collapsed and "+" or "–"
+	if not collapsed then body.Visible = true end
+	local tw = TweenService:Create(root, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+		Size = UDim2.fromOffset(W, collapsed and TOP or H),
+	})
+	tw.Completed:Once(function()
+		if collapsed then body.Visible = false end
+	end)
+	tw:Play()
 end)
+
+-- row builders ------------------------------------------------------
+local function section(page, text)
+	return new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 14),
+		BackgroundTransparency = 1,
+		Text = text:upper(),
+		Font = F,
+		TextSize = 10,
+		TextColor3 = PUMPKIN,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = nextOrd(),
+	}, page)
+end
+
+local function infoRow(page, text)
+	return new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16),
+		BackgroundTransparency = 1,
+		Text = text,
+		Font = F,
+		TextSize = 11,
+		TextColor3 = DIM,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = nextOrd(),
+	}, page)
+end
+
+-- row with a switch on the right. t.setState(on) also runs the callback.
+local function toggle(page, text, cb)
+	local row = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundColor3 = ROW,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "",
+		LayoutOrder = nextOrd(),
+	}, page)
+	corner(row, 6)
+	local rs = stroke(row, LINE, 1)
+	local lbl = new("TextLabel", {
+		Size = UDim2.new(1, -54, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		Font = F,
+		TextSize = 12,
+		TextColor3 = DIM,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, row)
+	local sw = new("Frame", {
+		Size = UDim2.fromOffset(32, 16),
+		Position = UDim2.new(1, -42, 0.5, -8),
+		BackgroundColor3 = SW_OFF,
+		BorderSizePixel = 0,
+	}, row)
+	corner(sw, 8)
+	local knob = new("Frame", {
+		Size = UDim2.fromOffset(12, 12),
+		Position = UDim2.fromOffset(2, 2),
+		BackgroundColor3 = DIM,
+		BorderSizePixel = 0,
+	}, sw)
+	corner(knob, 6)
+
+	local t = { on = false }
+	function t.set(on) -- visuals only
+		t.on = on
+		tween(row, 0.15, { BackgroundColor3 = on and ROW_ON or ROW })
+		tween(rs, 0.15, { Color = on and GREEN_DARK or LINE })
+		tween(lbl, 0.15, { TextColor3 = on and TXT or DIM })
+		tween(sw, 0.15, { BackgroundColor3 = on and GREEN or SW_OFF })
+		tween(knob, 0.15, {
+			Position = on and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2),
+			BackgroundColor3 = on and Color3.new(1, 1, 1) or DIM,
+		})
+	end
+	function t.setState(on, force)
+		if t.on == on and not force then return end
+		t.set(on)
+		cb(on)
+	end
+	row.Activated:Connect(function()
+		t.setState(not t.on)
+	end)
+	row.MouseEnter:Connect(function()
+		if not t.on then tween(row, 0.1, { BackgroundColor3 = ROW_HOVER }) end
+	end)
+	row.MouseLeave:Connect(function()
+		tween(row, 0.1, { BackgroundColor3 = t.on and ROW_ON or ROW })
+	end)
+	return t
+end
+
+local function flash(b, base)
+	b.BackgroundColor3 = FLASH
+	tween(b, 0.35, { BackgroundColor3 = base })
+end
+
+local function actionBtn(parent, text, size, pos, cb, danger)
+	local base = danger and Color3.fromRGB(46, 13, 17) or ROW
+	local b = new("TextButton", {
+		Size = size,
+		Position = pos,
+		BackgroundColor3 = base,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = text,
+		Font = F,
+		TextSize = 12,
+		TextColor3 = danger and Color3.fromRGB(255, 140, 140) or DIM,
+	}, parent)
+	corner(b, 6)
+	stroke(b, danger and RED or LINE, 1)
+	b.Activated:Connect(function()
+		flash(b, base)
+		cb()
+	end)
+	return b
+end
+
+local function fullAction(page, text, cb, danger)
+	local b = actionBtn(page, text, UDim2.new(1, 0, 0, 30), UDim2.new(), cb, danger)
+	b.LayoutOrder = nextOrd()
+	return b
+end
+
+local function pair(page, aText, aCb, bText, bCb)
+	local row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundTransparency = 1,
+		LayoutOrder = nextOrd(),
+	}, page)
+	actionBtn(row, aText, UDim2.new(0.5, -3, 1, 0), UDim2.new(0, 0, 0, 0), aCb)
+	actionBtn(row, bText, UDim2.new(0.5, -3, 1, 0), UDim2.new(0.5, 3, 0, 0), bCb)
+end
+
+-- slider card: label + live value on top, track below
+local activeSlider
+local function slider(page, text, min, max, init, onChange)
+	local s = { value = init, page = page }
+
+	local row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundColor3 = ROW,
+		BorderSizePixel = 0,
+		LayoutOrder = nextOrd(),
+	}, page)
+	corner(row, 6)
+	stroke(row, LINE, 1)
+
+	new("TextLabel", {
+		Size = UDim2.new(0.6, -10, 0, 16),
+		Position = UDim2.fromOffset(10, 4),
+		BackgroundTransparency = 1,
+		Text = text,
+		Font = F,
+		TextSize = 12,
+		TextColor3 = DIM,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, row)
+	local val = new("TextLabel", {
+		Size = UDim2.new(0.4, -10, 0, 16),
+		Position = UDim2.new(0.6, 0, 0, 4),
+		BackgroundTransparency = 1,
+		Font = F,
+		TextSize = 12,
+		TextColor3 = GREEN,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}, row)
+
+	local area = new("Frame", {
+		Size = UDim2.new(1, -20, 0, 18),
+		Position = UDim2.fromOffset(10, 20),
+		BackgroundTransparency = 1,
+	}, row)
+	local track = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 4),
+		Position = UDim2.new(0, 0, 0.5, -2),
+		BackgroundColor3 = Color3.fromRGB(34, 30, 44),
+		BorderSizePixel = 0,
+	}, area)
+	corner(track, 2)
+	local fill = new("Frame", { BackgroundColor3 = GREEN, BorderSizePixel = 0 }, track)
+	corner(fill, 2)
+	local knob = new("Frame", {
+		Size = UDim2.fromOffset(12, 12),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = GREEN_LIGHT,
+		BorderSizePixel = 0,
+	}, area)
+	corner(knob, 6)
+	stroke(knob, GREEN, 2)
+
+	local function refresh()
+		local a = (s.value - min) / (max - min)
+		fill.Size = UDim2.new(a, 0, 1, 0)
+		knob.Position = UDim2.new(a, 0, 0.5, 0)
+		val.Text = tostring(s.value)
+	end
+
+	function s.setFromX(x)
+		local a = math.clamp((x - area.AbsolutePosition.X) / area.AbsoluteSize.X, 0, 1)
+		s.value = math.floor(min + a * (max - min) + 0.5)
+		refresh()
+		onChange(s.value)
+	end
+
+	area.InputBegan:Connect(function(i)
+		if isPress(i) then
+			activeSlider = s
+			page.ScrollingEnabled = false -- so dragging a slider doesn't scroll the page on touch
+			s.setFromX(i.Position.X)
+		end
+	end)
+
+	refresh()
+	onChange(init)
+	return s
+end
 
 UIS.InputChanged:Connect(function(i)
-	if not isMove(i) then return end
-	if sliding then
-		setFromX(i.Position.X)
-	elseif moving then
-		local d = i.Position - dragStart
-		frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	if activeSlider and isMove(i) then
+		activeSlider.setFromX(i.Position.X)
 	end
 end)
-
 UIS.InputEnded:Connect(function(i)
-	if isPress(i) then
-		sliding = false
-		moving = false
+	if activeSlider and isPress(i) then
+		activeSlider.page.ScrollingEnabled = true
+		activeSlider = nil
 	end
 end)
 
--- coins
+-- knife warning: title turns red (and the pumpkin ring too, so you see it when hidden)
+local dangerShown = false
+local function setDanger(d)
+	if d then
+		title.Text = ("⚠ knife %dm"):format(d)
+		if not dangerShown then
+			titleGrad.Color = ColorSequence.new(RED, Color3.fromRGB(255, 150, 150))
+			pumpStroke.Color = RED
+			dangerShown = true
+		end
+	elseif dangerShown then
+		title.Text = "beg4ciferr_"
+		titleGrad.Color = TITLE_COLORS
+		pumpStroke.Color = PUMPKIN
+		dangerShown = false
+	end
+end
+
+-- blinking cursor on the title
+task.spawn(function()
+	local on = true
+	while true do
+		if not dangerShown then
+			title.Text = on and "beg4ciferr_" or "beg4ciferr "
+		end
+		on = not on
+		task.wait(0.6)
+	end
+end)
+
+-- coins: scan once, then just listen (rescanning the whole workspace was the hitching)
+local function track_(o)
+	if o.Name == NAME and (o:IsA("BasePart") or o:IsA("Model")) then
+		coins[o] = true
+	end
+end
+
+workspace.DescendantAdded:Connect(track_)
+workspace.DescendantRemoving:Connect(function(o)
+	coins[o] = nil
+end)
+
+task.spawn(function()
+	local n = 0
+	for _, o in ipairs(workspace:GetDescendants()) do
+		track_(o)
+		n += 1
+		if n % 1500 == 0 then task.wait() end
+	end
+end)
+
 local function posOf(obj)
 	if obj:IsA("Model") then
 		return obj:GetPivot().Position
 	end
 	return obj.Position
+end
+
+-- how tall the coin is (so we know how little of us has to poke into it)
+local function halfHeight(obj)
+	if obj:IsA("Model") then
+		return obj:GetExtentsSize().Y / 2
+	end
+	local s, cf = obj.Size, obj.CFrame
+	return (math.abs(cf.RightVector.Y) * s.X + math.abs(cf.UpVector.Y) * s.Y + math.abs(cf.LookVector.Y) * s.Z) / 2
 end
 
 local function isIgnored(obj)
@@ -202,7 +787,7 @@ end
 
 local function countLeft()
 	local n = 0
-	for _, c in ipairs(coins) do
+	for c in pairs(coins) do
 		if c.Parent and not isIgnored(c) then
 			n += 1
 		end
@@ -210,19 +795,16 @@ local function countLeft()
 	return n
 end
 
-local function scan()
-	local list = {}
-	for _, o in ipairs(workspace:GetDescendants()) do
-		if o.Name == NAME and (o:IsA("BasePart") or o:IsA("Model")) then
-			table.insert(list, o)
-		end
+local leftLabel -- created with the farm page below
+local function setLeft()
+	if leftLabel then
+		leftLabel.Text = "coins left  " .. countLeft()
 	end
-	coins = list
 end
 
 local function nearest(pos)
 	local best, bestD
-	for _, c in ipairs(coins) do
+	for c in pairs(coins) do
 		if c.Parent and not isIgnored(c) then
 			local d = (posOf(c) - pos).Magnitude
 			if not bestD or d < bestD then
@@ -235,66 +817,909 @@ end
 
 local function grabbed(obj)
 	ignored[obj] = os.clock() + IGNORE_TIME
-	leftLabel.Text = "left: " .. countLeft()
+	setLeft()
 end
 
-local function goalFor(coinPos, pos)
+local function dropTarget()
+	target, dwellUntil, rising = nil, nil, false
+end
+
+local function goalFor(obj, pos)
+	local c = posOf(obj)
 	if not underOn then
-		return coinPos + ABOVE
+		return c + ABOVE
 	end
-	local flat = Vector3.new(coinPos.X - pos.X, 0, coinPos.Z - pos.Z).Magnitude
-	if flat > NEAR then
-		return Vector3.new(coinPos.X, coinPos.Y - DEPTH, coinPos.Z)
+	deepY = c.Y - DEPTH
+	surfY = c.Y
+	local flat = Vector3.new(c.X - pos.X, 0, c.Z - pos.Z).Magnitude
+	-- once we start rising we stay rising, otherwise it flips back and forth near the coin
+	if rising then
+		if flat > NEAR * 2.5 then rising = false end
+	elseif flat <= NEAR then
+		rising = true
 	end
-	return coinPos + Vector3.new(0, TOUCH_Y, 0)
+	if not rising then
+		return Vector3.new(c.X, deepY, c.Z)
+	end
+	return Vector3.new(c.X, c.Y - halfHeight(obj) - BODY_HALF + OVERLAP, c.Z)
+end
+
+-- eased movement: accelerates, cruises at the slider speed, brakes into the goal
+local function steer(pos, goal, dt)
+	local diff = goal - pos
+	local dist = diff.Magnitude
+	if dist < 0.001 then return pos end
+	local want = math.min(speed, math.max(dist * EASE, SLOW))
+	vel = vel:Lerp(diff.Unit * want, 1 - math.exp(-ACCEL * dt))
+	local step = vel * dt
+	if step.Magnitude >= dist then
+		vel = Vector3.zero
+		return goal
+	end
+	return pos + step
 end
 
 local function surface()
 	if not wentUnder then return end
 	wentUnder = false
 	wasLay = false
-	local root = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-	if root then
-		root.CFrame = CFrame.new(root.Position + Vector3.new(0, DEPTH + 4, 0)) * CFrame.Angles(0, yaw, 0)
-		root.AssemblyLinearVelocity = Vector3.zero
+	deepY, surfY = nil, nil
+	local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+	if r then
+		r.CFrame = CFrame.new(r.Position + Vector3.new(0, DEPTH + 4, 0)) * CFrame.Angles(0, yaw, 0)
+		r.AssemblyLinearVelocity = Vector3.zero
 	end
+end
+
+-- stop all the farm stuff and pop back above ground
+local function stopAll()
+	tpT.setState(false, true)
+	spinT.setState(false, true)
+	underT.setState(false, true)
+end
+
+-- cached part lists (no GetDescendants every frame)
+local function refreshMine()
+	local list = {}
+	local char = lp.Character
+	if char then
+		for _, p in ipairs(char:GetDescendants()) do
+			if p:IsA("BasePart") then
+				list[#list + 1] = p
+			end
+		end
+	end
+	myParts = list
+end
+
+local function refreshOthers()
+	local list = {}
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if pl ~= lp and pl.Character then
+			for _, p in ipairs(pl.Character:GetDescendants()) do
+				if p:IsA("BasePart") then
+					list[#list + 1] = p
+				end
+			end
+		end
+	end
+	otherParts = list
+end
+
+-- hide other players' name tags (only on your screen)
+local function applyNames(on)
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if pl ~= lp and pl.Character then
+			local h = pl.Character:FindFirstChildOfClass("Humanoid")
+			if h then
+				h.DisplayDistanceType = on and Enum.HumanoidDisplayDistanceType.None or Enum.HumanoidDisplayDistanceType.Viewer
+			end
+		end
+	end
+end
+
+-- role esp ----------------------------------------------------------
+local function scanTools(box, flags)
+	if not box then return end
+	for _, t in ipairs(box:GetChildren()) do
+		if t:IsA("Tool") then
+			local n = t.Name:lower()
+			if n:find("knife") then
+				flags.knife = true
+			elseif n:find("gun") or n:find("revolver") then
+				flags.gun = true
+			end
+		end
+	end
+end
+
+local function roleOf(pl)
+	local flags = {}
+	scanTools(pl:FindFirstChildOfClass("Backpack"), flags)
+	scanTools(pl.Character, flags)
+	if flags.knife then return "knife", RED end
+	if flags.gun then return "gun", BLUE end
+	return "none", ROLE_GREEN
+end
+
+local function clearEsp(pl)
+	local e = esp[pl]
+	if e then
+		e.hl:Destroy()
+		e.bb:Destroy()
+		esp[pl] = nil
+	end
+end
+
+local function makeEsp(pl, char, head)
+	local hl = Instance.new("Highlight")
+	hl.Adornee = char
+	hl.FillTransparency = 0.55
+	hl.OutlineTransparency = 0
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.Parent = char
+
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.new(0, 130, 0, 14)
+	bb.StudsOffset = Vector3.new(0, 2.4, 0)
+	bb.AlwaysOnTop = true
+	bb.Adornee = head
+	bb.Parent = head
+
+	local tl = Instance.new("TextLabel")
+	tl.Size = UDim2.new(1, 0, 1, 0)
+	tl.BackgroundTransparency = 1
+	tl.Font = F
+	tl.TextSize = ESP_TEXT
+	tl.TextStrokeTransparency = 0.4
+	tl.Parent = bb
+
+	esp[pl] = { char = char, hl = hl, bb = bb, tl = tl }
+end
+
+-- lighting: fullbright and spooky sky share one saved copy of the originals
+local LIGHT_PROPS = { "Brightness", "ClockTime", "FogStart", "FogEnd", "FogColor", "Ambient", "OutdoorAmbient", "GlobalShadows" }
+local lightSaved, grade
+local function applyLight()
+	if grade then
+		grade:Destroy()
+		grade = nil
+	end
+	if (brightOn or spookyOn) and not lightSaved then
+		lightSaved = {}
+		for _, k in ipairs(LIGHT_PROPS) do
+			lightSaved[k] = Lighting[k]
+		end
+	end
+	if brightOn then
+		Lighting.Brightness = 2
+		Lighting.ClockTime = 14
+		Lighting.FogEnd = 1e5
+		Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+		Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+		Lighting.GlobalShadows = false
+	elseif spookyOn then
+		-- purple night + orange tint, still bright enough to see where you're going
+		Lighting.Brightness = 1.5
+		Lighting.ClockTime = 0
+		Lighting.FogColor = Color3.fromRGB(38, 16, 52)
+		Lighting.FogStart = 120
+		Lighting.FogEnd = 900
+		Lighting.Ambient = Color3.fromRGB(105, 70, 140)
+		Lighting.OutdoorAmbient = Color3.fromRGB(95, 62, 130)
+		grade = Instance.new("ColorCorrectionEffect")
+		grade.Tint = Color3.fromRGB(255, 220, 190)
+		grade.Saturation = 0.15
+		grade.Contrast = 0.08
+		grade.Parent = Lighting
+	elseif lightSaved then
+		for k, v in pairs(lightSaved) do
+			Lighting[k] = v
+		end
+		lightSaved = nil
+	end
+end
+
+-- low gfx: drops quality and switches off particle junk (restores what it turned off)
+local gfxSaved
+local function setLowGfx(on)
+	if on then
+		gfxSaved = { quality = nil, off = {} }
+		pcall(function()
+			gfxSaved.quality = settings().Rendering.QualityLevel
+			settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+		end)
+		local saved = gfxSaved
+		task.spawn(function()
+			local n = 0
+			for _, o in ipairs(workspace:GetDescendants()) do
+				if o:IsA("ParticleEmitter") or o:IsA("Smoke") or o:IsA("Fire") or o:IsA("Sparkles") or o:IsA("Trail") then
+					if o.Enabled then
+						o.Enabled = false
+						saved.off[#saved.off + 1] = o
+					end
+				end
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+	elseif gfxSaved then
+		local saved = gfxSaved
+		gfxSaved = nil
+		pcall(function()
+			if saved.quality then settings().Rendering.QualityLevel = saved.quality end
+		end)
+		for _, o in ipairs(saved.off) do
+			if o.Parent then o.Enabled = true end
+		end
+	end
+end
+
+-- x-ray: see-through world (coins and players stay solid)
+local xrayed
+local function setXray(on)
+	if on then
+		local mine = {}
+		xrayed = mine
+		task.spawn(function()
+			local n = 0
+			for _, o in ipairs(workspace:GetDescendants()) do
+				if o:IsA("BasePart") and o.Name ~= NAME then
+					local m = o:FindFirstAncestorOfClass("Model")
+					if not (m and m:FindFirstChildOfClass("Humanoid")) then
+						o.LocalTransparencyModifier = 0.65
+						mine[#mine + 1] = o
+					end
+				end
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+	elseif xrayed then
+		local mine = xrayed
+		xrayed = nil
+		for _, o in ipairs(mine) do
+			if o.Parent then o.LocalTransparencyModifier = 0 end
+		end
+	end
+end
+
+-- pages -------------------------------------------------------------
+
+-- farm
+section(pageFarm, "auto grab")
+tpT = toggle(pageFarm, "tp to coins", function(on)
+	tpOn = on
+	dropTarget()
+	vel = Vector3.zero
+	if on and flyT and flyT.on then flyT.setState(false) end
+	if not on then
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.PlatformStand = false end
+		surface()
+	end
+end)
+spinT = toggle(pageFarm, "spin", function(on)
+	spinOn = on
+end)
+underT = toggle(pageFarm, "go under", function(on)
+	underOn = on
+	if not on then surface() end
+end)
+slider(pageFarm, "speed", MIN_SPEED, MAX_SPEED, speed, function(v)
+	speed = v
+end)
+leftLabel = infoRow(pageFarm, "coins left  0")
+leftLabel.TextColor3 = GREEN
+setLeft()
+
+section(pageFarm, "safety")
+toggle(pageFarm, "anti-fling", function(on)
+	flingOn = on
+	safeCF = nil
+	if on then refreshOthers() end
+end)
+toggle(pageFarm, "role esp", function(on)
+	espOn = on
+	if not on then
+		for pl in pairs(esp) do
+			clearEsp(pl)
+		end
+		setDanger(nil)
+	end
+end)
+toggle(pageFarm, "anti-void", function(on)
+	voidOn = on
+	lastGround = nil
+	status(on and "anti-void on" or "anti-void off")
+end)
+
+-- move
+section(pageMove, "movement")
+toggle(pageMove, "noclip", function(on)
+	noclipOn = on
+	status(on and "noclip on" or "noclip off")
+end)
+toggle(pageMove, "inf jump", function(on)
+	infJumpOn = on
+end)
+flyT = toggle(pageMove, "fly", function(on)
+	flyOn = on
+	flyVel = Vector3.zero
+	if on and tpT.on then tpT.setState(false) end
+	if on then
+		status("fly: look to steer, space up, shift down")
+	elseif not tpOn then
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.PlatformStand = false end
+	end
+end)
+slider(pageMove, "fly speed", 10, 100, flyVal, function(v)
+	flyVal = v
+end)
+
+section(pageMove, "speed + jump")
+toggle(pageMove, "walkspeed", function(on)
+	walkOn = on
+	local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+	if hum then
+		if on then
+			origWalk = hum.WalkSpeed
+		elseif origWalk then
+			hum.WalkSpeed = origWalk
+		end
+	end
+end)
+slider(pageMove, "walkspeed", 16, 120, walkVal, function(v)
+	walkVal = v
+end)
+toggle(pageMove, "jump power", function(on)
+	jumpOn = on
+	local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+	if hum then
+		if on then
+			origJump, origJumpH = hum.JumpPower, hum.JumpHeight
+		elseif origJump then
+			if hum.UseJumpPower then
+				hum.JumpPower = origJump
+			else
+				hum.JumpHeight = origJumpH
+			end
+		end
+	end
+end)
+slider(pageMove, "jump power", 50, 200, jumpVal, function(v)
+	jumpVal = v
+end)
+toggle(pageMove, "gravity", function(on)
+	gravOn = on
+	if on then
+		origGrav = workspace.Gravity
+		workspace.Gravity = gravVal
+	elseif origGrav then
+		workspace.Gravity = origGrav
+	end
+end)
+slider(pageMove, "gravity", 20, 196, gravVal, function(v)
+	gravVal = v
+end)
+
+-- view
+section(pageView, "lighting")
+brightT = toggle(pageView, "fullbright", function(on)
+	brightOn = on
+	if on and spookyT.on then
+		spookyOn = false
+		spookyT.set(false)
+	end
+	applyLight()
+end)
+spookyT = toggle(pageView, "spooky sky", function(on)
+	spookyOn = on
+	if on and brightT.on then
+		brightOn = false
+		brightT.set(false)
+	end
+	applyLight()
+end)
+
+section(pageView, "camera")
+toggle(pageView, "safe cam", function(on)
+	camOn = on
+end)
+toggle(pageView, "far zoom", function(on)
+	zoomOn = on
+	lp.CameraMaxZoomDistance = on and 2000 or origMaxZoom
+end)
+toggle(pageView, "custom fov", function(on)
+	fovOn = on
+	local cam = workspace.CurrentCamera
+	if cam then
+		if on then
+			origFov = cam.FieldOfView
+		elseif origFov then
+			cam.FieldOfView = origFov
+		end
+	end
+end)
+slider(pageView, "fov", 40, 120, fovVal, function(v)
+	fovVal = v
+end)
+
+section(pageView, "world")
+toggle(pageView, "x-ray", function(on)
+	xrayOn = on
+	setXray(on)
+	status(on and "x-ray on" or "x-ray off")
+end)
+toggle(pageView, "hide names", function(on)
+	namesOn = on
+	applyNames(on)
+end)
+toggle(pageView, "low gfx", function(on)
+	gfxOn = on
+	setLowGfx(on)
+	status(on and "low gfx on" or "low gfx off")
+end)
+
+-- tools
+section(pageTools, "session")
+toggle(pageTools, "anti-afk", function(on)
+	afkOn = on
+	status(on and "anti-afk on" or "anti-afk off")
+end)
+pair(pageTools, "reset char", function()
+	local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+	if hum then hum.Health = 0 end
+end, "rejoin", function()
+	status("rejoining...")
+	local ok = pcall(function()
+		TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp)
+	end)
+	if not ok then status("rejoin failed") end
+end)
+
+section(pageTools, "home")
+pair(pageTools, "set home", function()
+	local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+	if r and not (tpOn and underOn) then
+		homeCF = r.CFrame
+		status("home saved")
+	else
+		status("surface first, then set home")
+	end
+end, "go home", function()
+	local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+	if not homeCF then
+		status("no home set yet")
+	elseif r then
+		stopAll()
+		r.CFrame = homeCF + Vector3.new(0, 3, 0)
+		r.AssemblyLinearVelocity = Vector3.zero
+		status("back home")
+	end
+end)
+
+fullAction(pageTools, "panic", function()
+	stopAll()
+	flyT.setState(false)
+	status("stopped, you're above ground")
+end, true)
+
+section(pageTools, "info")
+local statsLabel = infoRow(pageTools, "fps –  ·  ping –")
+local infoLabel = infoRow(pageTools, "age –  ·  players –")
+
+-- chat --------------------------------------------------------------
+-- private chat through your own relay (relay_server.js). only people running this script
+-- with the same RELAY_KEY ever see these messages. needs your executor's http request function.
+-- note: these messages are not run through roblox's chat filter.
+local RELAY_URL = "https://relay-2-pnd0.onrender.com" -- no trailing slash
+local RELAY_KEY = "raven-raven-6899-4fc613"          -- must match RELAY_KEY on the server
+local ROOM_BY_SERVER = true  -- true: only people in your current server, false: everyone in this game
+local MAX_CHARS = 150
+local POLL_EVERY = 2
+
+local HttpService = game:GetService("HttpService")
+local httpReq = request or http_request or (syn and syn.request) or (http and http.request)
+local room = ROOM_BY_SERVER and game.JobId or tostring(game.PlaceId)
+if room == "" then room = "studio" end
+
+local chatRows, chatCount, lastSend = {}, 0, 0
+
+local function esc(s)
+	return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+end
+
+local function addChat(name, text, mine)
+	chatCount += 1
+	local l = new("TextLabel", {
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, -4, 0, 0),
+		BackgroundTransparency = 1,
+		RichText = true,
+		TextWrapped = true,
+		Font = F,
+		TextSize = 12,
+		TextColor3 = TXT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		LayoutOrder = chatCount,
+		Text = ('<font color="%s">%s</font>  %s'):format(mine and "#39ff6a" or "#ff8a20", esc(name), esc(text)),
+	}, chatLog)
+	chatRows[#chatRows + 1] = l
+	if #chatRows > 60 then
+		table.remove(chatRows, 1):Destroy()
+	end
+	task.delay(0.05, function()
+		chatLog.CanvasPosition = Vector2.new(0, math.max(0, chatLog.AbsoluteCanvasSize.Y - chatLog.AbsoluteSize.Y))
+	end)
+end
+
+-- one request to the relay. returns the decoded reply, or nil + status code
+local function call(method, path, body)
+	if not httpReq then return nil end
+	local ok, res = pcall(httpReq, {
+		Url = RELAY_URL .. path,
+		Method = method,
+		Headers = { ["Content-Type"] = "application/json", ["x-key"] = RELAY_KEY },
+		Body = body and HttpService:JSONEncode(body) or nil,
+	})
+	if not ok or type(res) ~= "table" then return nil end
+	if res.StatusCode ~= 200 then return nil, res.StatusCode end
+	local ok2, data = pcall(function()
+		return HttpService:JSONDecode(res.Body)
+	end)
+	return ok2 and data or nil
+end
+
+local relayReady = true
+if not httpReq then
+	relayReady = false
+	addChat("info", "your executor has no http request function, so chat is off.", false)
+elseif RELAY_URL:find("your%-relay") then
+	relayReady = false
+	addChat("info", "set RELAY_URL and RELAY_KEY at the top of the chat section.", false)
+else
+	addChat("info", "private chat. only people running this script in the same room see it.", false)
+end
+
+local lastId, polling, connected = 0, false, false
+local function pollOnce()
+	if polling or not relayReady then return end
+	polling = true
+	local data, code = call("GET", ("/poll?room=%s&since=%d"):format(HttpService:UrlEncode(room), lastId))
+	if data and data.messages then
+		if not connected then
+			connected = true
+			status("chat connected")
+		end
+		for _, m in ipairs(data.messages) do
+			if m.id > lastId then
+				lastId = m.id
+				addChat(tostring(m.name), tostring(m.text), m.uid == lp.UserId)
+				if not pageChat.Visible then
+					status(tostring(m.name) .. ": " .. tostring(m.text))
+				end
+			end
+		end
+	elseif connected then
+		connected = false
+		status("chat lost connection")
+	elseif code == 401 then
+		status("chat: wrong RELAY_KEY")
+	end
+	polling = false
 end
 
 task.spawn(function()
 	while true do
-		scan()
-		leftLabel.Text = "left: " .. countLeft()
+		pollOnce()
+		task.wait(POLL_EVERY)
+	end
+end)
+
+sendChat = function()
+	local text = chatBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+	if text == "" then return end
+	if not relayReady then
+		status("chat isn't set up, see the chat tab")
+		return
+	end
+	if os.clock() - lastSend < 1.2 then
+		status("slow down a little")
+		return
+	end
+	local len = utf8.len(text)
+	if len and len > MAX_CHARS then
+		text = text:sub(1, utf8.offset(text, MAX_CHARS + 1) - 1)
+	end
+	lastSend = os.clock()
+	chatBox.Text = ""
+	task.spawn(function()
+		local data = call("POST", "/send", {
+			room = room,
+			name = lp.DisplayName,
+			uid = lp.UserId,
+			text = text,
+		})
+		if data and data.ok then
+			pollOnce() -- show it right away instead of waiting for the next poll
+		else
+			status("couldn't send, check the relay")
+		end
+	end)
+end
+
+actionBtn(pageChat, "send", UDim2.fromOffset(70, 30), UDim2.new(1, -78, 1, -38), function()
+	sendChat()
+end)
+chatBox.FocusLost:Connect(function(enter)
+	if enter then sendChat() end
+end)
+
+-- loops -------------------------------------------------------------
+task.spawn(function()
+	while true do
+		refreshMine()
+		if flingOn then refreshOthers() end
+		setLeft()
+		if namesOn then applyNames(true) end
+
+		local t = math.floor(workspace.DistributedGameTime)
+		infoLabel.Text = ("age %d:%02d:%02d  ·  %d/%d players"):format(
+			t // 3600, (t % 3600) // 60, t % 60, #Players:GetPlayers(), Players.MaxPlayers
+		)
 		task.wait(0.5)
 	end
 end)
 
--- noclip while under so the floor doesn't shove you out
-RunService.Stepped:Connect(function()
-	if not (tpOn and underOn) then return end
-	local char = lp.Character
-	if not char then return end
-	for _, p in ipairs(char:GetDescendants()) do
-		if p:IsA("BasePart") then
-			p.CanCollide = false
-		end
+-- time in server
+task.spawn(function()
+	while true do
+		local t = math.floor(os.clock() - joined)
+		timeLabel.Text = ("👻 %d:%02d:%02d"):format(t // 3600, (t % 3600) // 60, t % 60)
+		task.wait(0.5)
 	end
 end)
 
--- main loop: move + spin + lay down in one place so they don't fight
-RunService.Heartbeat:Connect(function(dt)
-	local root = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-	if not (tpOn or spinOn) or not root then
+-- fps / ping
+local frames = 0
+task.spawn(function()
+	while true do
+		task.wait(1)
+		local fps = frames
+		frames = 0
+		local ping = 0
+		pcall(function()
+			ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+		end)
+		statsLabel.Text = ("fps %d  ·  ping %dms"):format(fps, ping)
+	end
+end)
+
+-- role esp loop
+task.spawn(function()
+	while true do
+		if espOn then
+			local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+			local closestKnife
+			for _, pl in ipairs(Players:GetPlayers()) do
+				if pl ~= lp then
+					local char = pl.Character
+					local head = char and char:FindFirstChild("Head")
+					if head then
+						local e = esp[pl]
+						if e and e.char ~= char then
+							clearEsp(pl)
+							e = nil
+						end
+						if not e then
+							makeEsp(pl, char, head)
+							e = esp[pl]
+						end
+						local role, color = roleOf(pl)
+						e.hl.FillColor = color
+						e.hl.OutlineColor = color
+						e.tl.TextColor3 = color
+						local hrp = char:FindFirstChild("HumanoidRootPart")
+						local dist = (myRoot and hrp) and math.floor((myRoot.Position - hrp.Position).Magnitude) or 0
+						e.tl.Text = ("%s · %s · %dm"):format(pl.Name, role, dist)
+						if role == "knife" and myRoot and hrp then
+							if not closestKnife or dist < closestKnife then
+								closestKnife = dist
+							end
+						end
+					else
+						clearEsp(pl)
+					end
+				end
+			end
+			setDanger(closestKnife and closestKnife <= DANGER_DIST and closestKnife or nil)
+		end
+		task.wait(0.2)
+	end
+end)
+
+Players.PlayerRemoving:Connect(clearEsp)
+
+-- anti afk
+lp.Idled:Connect(function()
+	if afkOn then
+		VirtualUser:CaptureController()
+		VirtualUser:ClickButton2(Vector2.new())
+	end
+end)
+
+-- infinite jump
+UIS.JumpRequest:Connect(function()
+	if infJumpOn then
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end
+end)
+
+-- the game's own control module gives a move vector for keyboard AND touch (used by fly)
+local controls
+task.spawn(function()
+	local ok, mod = pcall(function()
+		return require(lp:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 10))
+	end)
+	if ok and mod then
+		local ok2, c = pcall(function() return mod:GetControls() end)
+		if ok2 then controls = c end
+	end
+end)
+
+local function moveVec(hum)
+	if controls then
+		local ok, v = pcall(function() return controls:GetMoveVector() end)
+		if ok and v then return v end
+	end
+	local cam = workspace.CurrentCamera
+	local md = hum.MoveDirection
+	if cam and md.Magnitude > 0 then
+		local o = cam.CFrame:VectorToObjectSpace(md)
+		return Vector3.new(o.X, 0, o.Z)
+	end
+	return Vector3.zero
+end
+
+-- safe cam: while you're underground the camera hangs at coin level instead of in the dirt
+local camPart = Instance.new("Part")
+camPart.Name = "cam"
+camPart.Anchored = true
+camPart.CanCollide = false
+camPart.CanQuery = false
+camPart.CanTouch = false
+camPart.Transparency = 1
+camPart.Size = Vector3.new(1, 1, 1)
+
+RunService.RenderStepped:Connect(function()
+	frames += 1
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local char = lp.Character
+	local r = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+	if fovOn then cam.FieldOfView = fovVal end
+
+	if camOn and tpOn and underOn and r then
+		local p = r.Position
+		local want = Vector3.new(p.X, surfY or (p.Y + DEPTH), p.Z)
+		if cam.CameraSubject ~= camPart then
+			camPart.Position = want
+			camPart.Parent = workspace
+			cam.CameraSubject = camPart
+		else
+			camPart.Position = camPart.Position:Lerp(want, 0.2)
+		end
+	elseif cam.CameraSubject == camPart then
+		if hum then cam.CameraSubject = hum end
+		camPart.Parent = nil
+	end
+end)
+
+-- main loop. runs before physics each frame so nothing fights the position we set
+RunService.PreSimulation:Connect(function(dt)
+	local char = lp.Character
+	local r = char and char:FindFirstChild("HumanoidRootPart")
+	if not r then
+		wasLay = false
+		return
+	end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+
+	-- walkspeed / jump power / gravity overrides (games like to reset these, so every frame)
+	if hum then
+		if walkOn then hum.WalkSpeed = walkVal end
+		if jumpOn then
+			if hum.UseJumpPower then
+				hum.JumpPower = jumpVal
+			else
+				hum.JumpHeight = 7.2 * (jumpVal / 50) ^ 2
+			end
+		end
+	end
+	if gravOn then workspace.Gravity = gravVal end
+
+	-- anti void: remember the last solid ground, snap back if you fall off the map
+	if voidOn and not (tpOn and underOn) then
+		if r.Position.Y < workspace.FallenPartsDestroyHeight + 60 then
+			if lastGround then
+				r.CFrame = lastGround
+				r.AssemblyLinearVelocity = Vector3.zero
+			end
+		elseif hum and hum.FloorMaterial ~= Enum.Material.Air then
+			lastGround = r.CFrame + Vector3.new(0, 3, 0)
+		end
+	end
+
+	-- anti fling: undo crazy velocity, and stop other players' bodies from colliding with you
+	-- (paused while flying, fly speed would look like a fling)
+	if flingOn and not flyOn then
+		local v, w = r.AssemblyLinearVelocity, r.AssemblyAngularVelocity
+		local flat = Vector3.new(v.X, 0, v.Z).Magnitude
+		if flat > FLING_SPEED or v.Y > FLING_UP or w.Magnitude > FLING_SPIN then
+			r.AssemblyLinearVelocity = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+			if safeCF then r.CFrame = safeCF end
+		else
+			safeCF = r.CFrame
+		end
+		for _, p in ipairs(otherParts) do
+			if p.CanCollide then p.CanCollide = false end
+		end
+	end
+
+	-- noclip (tp always noclips) + stop the humanoid from fighting us while tp is on
+	if tpOn or noclipOn then
+		for _, p in ipairs(myParts) do
+			if p.CanCollide then p.CanCollide = false end
+		end
+	end
+	if tpOn and hum and not hum.PlatformStand then
+		hum.PlatformStand = true
+	end
+
+	-- fly: steer with the normal movement controls + where the camera looks
+	if flyOn and not tpOn and hum then
+		local cam = workspace.CurrentCamera
+		if cam then
+			local mv = moveVec(hum)
+			local cf = cam.CFrame
+			local dir = cf.RightVector * mv.X - cf.LookVector * mv.Z
+			if not UIS:GetFocusedTextBox() then
+				if UIS:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.yAxis end
+				if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then dir -= Vector3.yAxis end
+			end
+			local want = dir.Magnitude > 0.05 and dir.Unit * flyVal or Vector3.zero
+			flyVel = flyVel:Lerp(want, 1 - math.exp(-10 * dt))
+			hum.PlatformStand = true
+			-- the extra upward bit cancels the gravity that gets added this frame
+			r.AssemblyLinearVelocity = flyVel + Vector3.new(0, workspace.Gravity * dt, 0)
+			r.AssemblyAngularVelocity = Vector3.zero
+			local look = cf.LookVector
+			local flat = Vector3.new(look.X, 0, look.Z)
+			if flat.Magnitude > 0.01 then
+				r.CFrame = CFrame.lookAt(r.Position, r.Position + flat)
+			end
+		end
+	end
+
+	if not (tpOn or spinOn) then
 		wasLay = false
 		return
 	end
 
-	local pos = root.Position
+	local pos = r.Position
 	local lay = tpOn and underOn
 
 	if spinOn then
 		yaw += math.rad(SPIN_DEG) * dt
 	elseif not wasLay then
-		local _, y = root.CFrame:ToOrientation()
+		local _, y = r.CFrame:ToOrientation()
 		yaw = y
 	end
 	wasLay = lay
@@ -305,58 +1730,61 @@ RunService.Heartbeat:Connect(function(dt)
 				if targetGoal and (pos - targetGoal).Magnitude < 8 then
 					grabbed(target)
 				end
-				target = nil
+				dropTarget()
 			elseif isIgnored(target) then
-				target = nil
+				dropTarget()
+			elseif os.clock() - targetAt > targetLimit then
+				-- stuck on this one, skip it
+				ignored[target] = os.clock() + IGNORE_TIME
+				dropTarget()
 			end
 		end
 
 		if not target then
 			target = nearest(pos)
-		end
-
-		if target then
-			local goal = goalFor(posOf(target), pos)
-			targetGoal = goal
-			local diff = goal - pos
-			local step = speed * dt
-			if diff.Magnitude <= math.max(step, 1) then
-				pos = goal
-				grabbed(target)
-				target = nil
-			else
-				pos = pos + diff.Unit * step
+			if target then
+				targetAt = os.clock()
+				targetLimit = 4 + ((posOf(target) - pos).Magnitude / speed) * 2.5
 			end
 		end
 
-		root.AssemblyLinearVelocity = Vector3.zero
+		if target then
+			local goal = goalFor(target, pos)
+			targetGoal = goal
+
+			if dwellUntil then
+				-- sitting on the coin until the touch goes through
+				pos = goal
+				if os.clock() >= dwellUntil then
+					grabbed(target)
+					dropTarget()
+				end
+			elseif (goal - pos).Magnitude <= ARRIVE then
+				pos = goal
+				vel = Vector3.zero
+				dwellUntil = os.clock() + DWELL
+			else
+				pos = steer(pos, goal, dt)
+			end
+		elseif underOn and deepY then
+			-- nothing to grab: sink back down and wait
+			pos = steer(pos, Vector3.new(pos.X, deepY, pos.Z), dt)
+		else
+			vel = Vector3.zero
+		end
+
+		r.AssemblyLinearVelocity = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
 		if underOn then
 			wentUnder = true
 		end
+	else
+		vel = Vector3.zero
 	end
 
 	local rot = CFrame.Angles(0, yaw, 0)
 	if lay then
 		rot = rot * CFrame.Angles(math.rad(90), 0, 0) -- on your back, face up
 	end
-	root.CFrame = CFrame.new(pos) * rot
-end)
-
--- buttons
-tpBtn.Activated:Connect(function()
-	tpOn = not tpOn
-	target = nil
-	setOn(tpBtn, tpOn)
-	if not tpOn then surface() end
-end)
-
-spinBtn.Activated:Connect(function()
-	spinOn = not spinOn
-	setOn(spinBtn, spinOn)
-end)
-
-underBtn.Activated:Connect(function()
-	underOn = not underOn
-	setOn(underBtn, underOn)
-	if not underOn then surface() end
+	r.CFrame = CFrame.new(pos) * rot
 end)
