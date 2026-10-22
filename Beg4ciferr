@@ -1690,9 +1690,34 @@ end)
 	local frozen, frozenCF = false, nil
 	local orbitUid, orbitAng = nil, 0
 	local fanUid, stareUid = nil, nil
+	local rjPending = false
+
+	-- control lock (used by .fan): turns off the game's controls and jumping
+	local lockControls
+	local function setLock(on)
+		if lockControls == nil then
+			local ok, c = pcall(function()
+				return require(lp:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 5)):GetControls()
+			end)
+			lockControls = ok and c or false
+		end
+		if lockControls then
+			pcall(function()
+				if on then lockControls:Disable() else lockControls:Enable() end
+			end)
+		end
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, not on) end)
+		end
+	end
 
 	TeleportService.TeleportInitFailed:Connect(function(_, result, msg)
 		status("teleport failed: " .. tostring(result) .. " " .. tostring(msg):sub(1, 50))
+		if rjPending then
+			rjPending = false
+			pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
+		end
 	end)
 
 	local function matches(q)
@@ -1809,9 +1834,11 @@ end)
 			stopAll()
 			flyT.setState(false)
 			fanUid = m.uid
-			status("owner called you over")
+			setLock(true)
+			status("owner called you over, controls locked")
 		elseif cmd == "unfan" then
 			fanUid = nil
+			setLock(false)
 			status("owner let you go")
 		elseif cmd == "stare" then
 			stareUid = m.uid
@@ -1842,11 +1869,17 @@ end)
 		elseif cmd == "forcerj" then
 			status("owner is rejoining you")
 			task.delay(1, function()
-				local ok = pcall(function()
-					TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp)
-				end)
-				if not ok then
+				if #Players:GetPlayers() <= 1 or game.JobId == "" then
+					-- alone in the server: it closes when they leave, so go to a fresh one
+					pcall(function() lp:Kick("Rejoining...") end)
+					task.wait()
 					pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
+				else
+					rjPending = true
+					pcall(function()
+						TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp)
+					end)
+					task.delay(8, function() rjPending = false end)
 				end
 			end)
 		elseif cmd == "join" then
@@ -1876,6 +1909,10 @@ end)
 	end)
 	lp.CharacterAdded:Connect(function()
 		frozenCF = nil
+		if fanUid then
+			task.wait(0.5)
+			setLock(true)
+		end
 	end)
 
 	-- fan: walk up to the owner. stare: keep facing the owner (both need the same server)
@@ -1887,6 +1924,14 @@ end)
 		local owner = Players:GetPlayerByUserId(uid)
 		local oroot = owner and owner.Character and owner.Character:FindFirstChild("HumanoidRootPart")
 		if not (r and hum and oroot) then return end
+		if fanUid then
+			-- keep them locked: no fly, no tp farm, no jumping
+			if flyT.on then flyT.setState(false) end
+			if tpT.on then stopAll() end
+			if hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
+				hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+			end
+		end
 		local flat = Vector3.new(oroot.Position.X - r.Position.X, 0, oroot.Position.Z - r.Position.Z)
 		local close = flat.Magnitude <= 4
 		if fanUid and not close then
@@ -1937,7 +1982,7 @@ end)
 	cmdRow(".blind / .unblind <user>", "black screen over the game")
 	cmdRow(".msg <user> <text>", "popup message from the owner")
 	cmdRow(".orbit / .unorbit <user>", "spins the user around the owner (same server)")
-	cmdRow(".fan / .unfan <user>", "makes the user walk up to the owner (same server)")
+	cmdRow(".fan / .unfan <user>", "user walks up to the owner, controls + jump locked (same server)")
 	cmdRow(".stare / .unstare <user>", "makes the user face the owner (same server)")
 	cmdRow(".kick <user>", "removes them (not a ban)")
 	section(cp, "server commands")
