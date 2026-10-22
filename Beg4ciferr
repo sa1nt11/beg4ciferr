@@ -1691,6 +1691,7 @@ end)
 	local orbitUid, orbitAng = nil, 0
 	local fanUid, stareUid = nil, nil
 	local rjPending = false
+	local surfUid = nil
 
 	-- control lock (used by .fan): turns off the game's controls and jumping
 	local lockControls
@@ -1846,6 +1847,22 @@ end)
 		elseif cmd == "unstare" then
 			stareUid = nil
 			status("owner stopped the staring")
+		elseif cmd == "surfboard" then
+			stopAll()
+			flyT.setState(false)
+			orbitUid, stareUid = nil, nil
+			if fanUid then
+				fanUid = nil
+				setLock(false)
+			end
+			surfUid = m.uid
+			status("owner is standing on you")
+		elseif cmd == "unsurf" then
+			surfUid = nil
+			local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+			if hum then hum.PlatformStand = false end
+			if r then r.CFrame = CFrame.new(r.Position + Vector3.new(0, 3, 0)) end
+			status("owner stepped off")
 		elseif cmd == "forcejoin" then
 			local place, job = rest:match("^(%d+)%s+(%S+)")
 			if not (place and job) then
@@ -1942,6 +1959,33 @@ end)
 		end
 	end)
 
+	-- surfboard: lie face down under the owner's feet, owner's feet on your torso (same server)
+	RunService.Heartbeat:Connect(function()
+		if not surfUid then return end
+		local r = myRoot()
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		local owner = Players:GetPlayerByUserId(surfUid)
+		local och = owner and owner.Character
+		local oroot = och and och:FindFirstChild("HumanoidRootPart")
+		local ohum = och and och:FindFirstChildOfClass("Humanoid")
+		if not (r and hum and oroot and ohum) then return end
+		-- how far the owner's feet are below their root part
+		local drop = ohum.RigType == Enum.HumanoidRigType.R6 and 3 or (ohum.HipHeight + oroot.Size.Y / 2)
+		local feet = oroot.Position - Vector3.new(0, drop, 0)
+		local _, oyaw = oroot.CFrame:ToOrientation()
+		hum.PlatformStand = true
+		for _, p in ipairs(myParts) do
+			if p.CanCollide then p.CanCollide = false end
+		end
+		-- face down (front pointing at the ground), head toward where the owner looks,
+		-- torso centre half a stud under the feet
+		r.CFrame = CFrame.new(feet - Vector3.new(0, 0.5, 0))
+			* CFrame.Angles(0, oyaw, 0)
+			* CFrame.Angles(math.rad(-90), 0, 0)
+		r.AssemblyLinearVelocity = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+	end)
+
 	-- orbit: circle around the owner (needs to be in the owner's server)
 	RunService.Heartbeat:Connect(function(dt)
 		if not orbitUid then return end
@@ -1984,6 +2028,7 @@ end)
 	cmdRow(".orbit / .unorbit <user>", "spins the user around the owner (same server)")
 	cmdRow(".fan / .unfan <user>", "user walks up to the owner, controls + jump locked (same server)")
 	cmdRow(".stare / .unstare <user>", "makes the user face the owner (same server)")
+	cmdRow(".surfboard / .unsurf <user>", "user lies face down under the owner's feet (same server)")
 	cmdRow(".kick <user>", "removes them (not a ban)")
 	section(cp, "server commands")
 	cmdRow(".forcejoin <user|all>", "sends the user to the owner's server")
@@ -2090,7 +2135,7 @@ end)
 		local function parse(text)
 			local cmd, who, extra = tostring(text):match("^%s*%.(%a+)%s+(%S+)%s*(.*)")
 			cmd = cmd and cmd:lower()
-			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1 })[cmd] then
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1, surfboard = 1, unsurf = 1 })[cmd] then
 				return cmd, who, extra
 			end
 		end
