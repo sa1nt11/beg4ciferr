@@ -1739,7 +1739,7 @@ end)
 
 	function b.handleCmd(m)
 		local body = tostring(m.text):sub(#CMD + 1)
-		local cmd, who = body:match("^(%a+)%s+(%S+)")
+		local cmd, who, rest = body:match("^(%a+)%s+(%S+)%s*(.*)")
 		if not cmd or not matches(who) then return end
 		local r = myRoot()
 		if cmd == "bring" then
@@ -1780,6 +1780,15 @@ end)
 		elseif cmd == "unblind" then
 			setBlind(false)
 			status("owner unblinded you")
+		elseif cmd == "kick" then
+			-- fixed, honest message: says who did it and that it isn't a ban
+			lp:Kick("Removed by the beg4ciferr owner. This is not a ban, you can rejoin.")
+		elseif cmd == "talk" or cmd == "msg" then
+			-- a private popup from the owner, only on their screen (never sent as them)
+			if rest and rest ~= "" then
+				b.toast("⚠ owner", rest:sub(1, 120))
+				status("owner: " .. rest:sub(1, 120))
+			end
 		end
 	end
 
@@ -1832,8 +1841,12 @@ end)
 			return prefix or contains
 		end
 
-		local function runCmd(cmd, who)
+		local function runCmd(cmd, who, extra)
 			local full = resolve(who)
+			if (cmd == "talk" or cmd == "msg") and (not extra or extra == "") then
+				status("usage: .msg name message")
+				return
+			end
 			if cmd == "to" then
 				local theirs = full and Players:FindFirstChild(full)
 				local tr = theirs and theirs.Character and theirs.Character:FindFirstChild("HumanoidRootPart")
@@ -1854,7 +1867,9 @@ end)
 			end
 			local arg = full and ("=" .. full) or who -- "=" = exact username
 			task.spawn(function()
-				if ownerSend(CMD .. cmd .. " " .. arg) then
+				local payload = CMD .. cmd .. " " .. arg
+				if extra and extra ~= "" then payload = payload .. " " .. extra:sub(1, 120) end
+				if ownerSend(payload) then
 					status(("sent .%s %s"):format(cmd, full or who))
 				else
 					status("command failed, check relay + secret")
@@ -1863,22 +1878,22 @@ end)
 		end
 
 		local function parse(text)
-			local cmd, who = tostring(text):match("^%s*%.(%a+)%s+(%S+)")
+			local cmd, who, extra = tostring(text):match("^%s*%.(%a+)%s+(%S+)%s*(.*)")
 			cmd = cmd and cmd:lower()
-			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1 })[cmd] then
-				return cmd, who
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1 })[cmd] then
+				return cmd, who, extra
 			end
 		end
 
 		-- the same message can show up in more than one chat event, so run it once
 		local lastKey, lastAt = nil, 0
 		local function fromRobloxChat(text)
-			local cmd, who = parse(text)
+			local cmd, who, extra = parse(text)
 			if not cmd then return end
-			local key = cmd .. " " .. who
+			local key = cmd .. " " .. who .. " " .. (extra or "")
 			if key == lastKey and os.clock() - lastAt < 1.5 then return end
 			lastKey, lastAt = key, os.clock()
-			runCmd(cmd, who)
+			runCmd(cmd, who, extra)
 		end
 
 		lp.Chatted:Connect(fromRobloxChat)
