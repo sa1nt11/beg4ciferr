@@ -1316,13 +1316,13 @@ local infoLabel = infoRow(pageTools, "age –  ·  players –")
 -- note: these messages are not run through roblox's chat filter.
 local RELAY_URL = "https://relay-2-pnd0.onrender.com" -- no trailing slash
 local RELAY_KEY = "raven-raven-6899-4fc613"          -- must match RELAY_KEY on the server
-local ROOM_BY_SERVER = true  -- true: only people in your current server, false: everyone in this game
+local ROOM_MODE = "global"   -- "server" = same server only, "game" = same game, "global" = everyone running the script in any game
 local MAX_CHARS = 150
 local POLL_EVERY = 2
 
 local HttpService = game:GetService("HttpService")
 local httpReq = request or http_request or (syn and syn.request) or (http and http.request)
-local room = ROOM_BY_SERVER and game.JobId or tostring(game.PlaceId)
+local room = ROOM_MODE == "server" and game.JobId or ROOM_MODE == "game" and tostring(game.PlaceId) or "global"
 if room == "" then room = "studio" end
 
 local chatRows, chatCount, lastSend = {}, 0, 0
@@ -1382,7 +1382,7 @@ elseif RELAY_URL:find("your%-relay") then
 	relayReady = false
 	addChat("info", "set RELAY_URL and RELAY_KEY at the top of the chat section.", false)
 else
-	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt.", false)
+	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt. the owner can freeze or bring users who abuse the script.", false)
 end
 
 -- everything new lives in chatRows.bc (a table), because the script is at lua's 200 local limit
@@ -1434,6 +1434,12 @@ local function pollOnce()
 				if txt:sub(1, #b.PRESENCE) == b.PRESENCE then
 					if not b.first and m.uid ~= lp.UserId then
 						b.users[m.uid] = os.clock()
+					end
+				elseif txt:sub(1, 11) == "::bc4cmd::" then
+					-- owner commands: only trusted if the relay marked them admin,
+					-- never replayed from history on join
+					if m.admin == true and b.handleCmd and not b.first and m.uid ~= lp.UserId then
+						b.handleCmd(m)
 					end
 				else
 					local ts = b.msgTime(m)
@@ -1559,6 +1565,163 @@ task.spawn(function()
 		task.wait(1)
 	end
 end)
+
+-- gun drop + owner commands (own function scope, so it doesn't touch the local limit)
+;(function()
+	local b = chatRows.bc
+	local GUN_NAME = "GunDrop"
+	local CMD = "::bc4cmd::"
+	local OWNER_SECRET = getgenv and getgenv().BC_OWNER or nil
+
+	-- gun drop: while on, every "GunDrop" gets pulled onto your root part ----
+	local gunOn = false
+	local gunDrops = {}
+	local gunAdd, gunRem, gunBeat
+
+	local function gunTrack(o)
+		if o.Name == GUN_NAME and (o:IsA("BasePart") or o:IsA("Model")) then
+			if not gunDrops[o] then status("gun drop spotted") end
+			gunDrops[o] = true
+		end
+	end
+
+	local function setGun(on)
+		gunOn = on
+		if gunAdd then gunAdd:Disconnect() gunAdd = nil end
+		if gunRem then gunRem:Disconnect() gunRem = nil end
+		if gunBeat then gunBeat:Disconnect() gunBeat = nil end
+		gunDrops = {}
+		if not on then
+			status("gun drop off")
+			return
+		end
+		status("looking for gun drop...")
+		gunAdd = workspace.DescendantAdded:Connect(gunTrack)
+		gunRem = workspace.DescendantRemoving:Connect(function(o)
+			gunDrops[o] = nil
+		end)
+		task.spawn(function()
+			local n = 0
+			for _, o in ipairs(workspace:GetDescendants()) do
+				if not gunOn then return end
+				gunTrack(o)
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+		gunBeat = RunService.Heartbeat:Connect(function()
+			local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+			if not r then return end
+			for o in pairs(gunDrops) do
+				if o.Parent then
+					if o:IsA("Model") then
+						o:PivotTo(r.CFrame)
+					else
+						o.CFrame = r.CFrame
+					end
+				else
+					gunDrops[o] = nil
+				end
+			end
+		end)
+	end
+
+	section(pageTools, "gun drop")
+	toggle(pageTools, "grab gun drop", setGun)
+
+	-- owner commands (run on the TARGET's client) ---------------------------
+	local frozen, frozenCF = false, nil
+
+	local function matches(q)
+		q = q:lower()
+		return lp.Name:lower():sub(1, #q) == q or lp.DisplayName:lower():sub(1, #q) == q
+	end
+
+	local function myRoot()
+		return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+	end
+
+	function b.handleCmd(m)
+		local body = tostring(m.text):sub(#CMD + 1)
+		local cmd, who = body:match("^(%a+)%s+(%S+)")
+		if not cmd or not matches(who) then return end
+		local r = myRoot()
+		if cmd == "bring" then
+			local owner = Players:GetPlayerByUserId(m.uid)
+			local oroot = owner and owner.Character and owner.Character:FindFirstChild("HumanoidRootPart")
+			if r and oroot then
+				stopAll()
+				r.CFrame = oroot.CFrame * CFrame.new(0, 0, -4)
+				r.AssemblyLinearVelocity = Vector3.zero
+				status("owner brought you")
+			end
+		elseif cmd == "freeze" then
+			stopAll()
+			flyT.setState(false)
+			frozen = true
+			frozenCF = r and r.CFrame
+			status("owner froze you")
+		elseif cmd == "unfreeze" then
+			frozen = false
+			frozenCF = nil
+			if r then r.Anchored = false end
+			status("owner unfroze you")
+		end
+	end
+
+	RunService.Heartbeat:Connect(function()
+		if not frozen then return end
+		local r = myRoot()
+		if r then
+			if not frozenCF then frozenCF = r.CFrame end
+			r.Anchored = true
+			r.CFrame = frozenCF
+		end
+	end)
+	lp.CharacterAdded:Connect(function()
+		frozenCF = nil
+	end)
+
+	-- owner side: typing ".freeze name" in the chat box sends a command ----
+	if OWNER_SECRET and httpReq then
+		local function ownerSend(text)
+			local ok, res = pcall(httpReq, {
+				Url = RELAY_URL .. "/send",
+				Method = "POST",
+				Headers = {
+					["Content-Type"] = "application/json",
+					["x-key"] = RELAY_KEY,
+					["x-owner"] = OWNER_SECRET,
+				},
+				Body = HttpService:JSONEncode({
+					room = room,
+					name = lp.DisplayName,
+					uid = lp.UserId,
+					text = text,
+				}),
+			})
+			return ok and type(res) == "table" and res.StatusCode == 200
+		end
+
+		local baseSend = sendChat
+		sendChat = function()
+			local text = chatBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+			local cmd, who = text:match("^%.(%a+)%s+(%S+)")
+			if cmd == "bring" or cmd == "freeze" or cmd == "unfreeze" then
+				chatBox.Text = ""
+				task.spawn(function()
+					if ownerSend(CMD .. cmd .. " " .. who) then
+						status(("sent .%s %s"):format(cmd, who))
+					else
+						status("command failed, check relay + secret")
+					end
+				end)
+				return
+			end
+			baseSend()
+		end
+	end
+end)()
 
 -- loops -------------------------------------------------------------
 task.spawn(function()
