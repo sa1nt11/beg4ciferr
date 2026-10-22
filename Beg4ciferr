@@ -260,7 +260,7 @@ new("Frame", {
 	BorderSizePixel = 0,
 }, body)
 
-local TAB_NAMES = { "farm", "move", "view", "tools", "chat" }
+local TAB_NAMES = { "farm", "move", "view", "tools", "chat", "cmds" }
 local tabBtns = {}
 for i, name in ipairs(TAB_NAMES) do
 	local t = new("TextButton", {
@@ -356,6 +356,7 @@ stroke(chatBox, LINE, 1)
 new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chatBox)
 
 local pages = { pageFarm, pageMove, pageView, pageTools, pageChat }
+pages[#pages + 1] = newPage() -- pages[6] = cmds tab
 
 local function selectTab(n)
 	for i, p in ipairs(pages) do
@@ -1382,13 +1383,14 @@ elseif RELAY_URL:find("your%-relay") then
 	relayReady = false
 	addChat("info", "set RELAY_URL and RELAY_KEY at the top of the chat section.", false)
 else
-	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt. the owner can freeze or bring users who abuse the script.", false)
+	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt. the owner has commands that can move, freeze, mute, blind, kick, or teleport you to another server. see the cmds tab.", false)
 end
 
 -- everything new lives in chatRows.bc (a table), because the script is at lua's 200 local limit
 chatRows.bc = {
 	LOG_FILE = "beg4ciferr_chat_log.txt",
 	PRESENCE = "::bc4presence::",
+	WHERE = "::bc4where::",
 	PRESENCE_EVERY = 20,
 	PRESENCE_TTL = 60,
 	TAG_TEXT = "beg4ciferr",
@@ -1440,6 +1442,10 @@ local function pollOnce()
 					-- never replayed from history on join
 					if m.admin == true and b.handleCmd and not b.first and m.uid ~= lp.UserId then
 						b.handleCmd(m)
+					end
+				elseif txt:sub(1, #b.WHERE) == b.WHERE then
+					if b.onWhere and not b.first and m.uid ~= lp.UserId then
+						b.onWhere(m, txt)
 					end
 				else
 					local ts = b.msgTime(m)
@@ -1740,7 +1746,9 @@ end)
 	function b.handleCmd(m)
 		local body = tostring(m.text):sub(#CMD + 1)
 		local cmd, who, rest = body:match("^(%a+)%s+(%S+)%s*(.*)")
-		if not cmd or not matches(who) then return end
+		if not cmd then return end
+		local toAll = who:lower() == "all" and (cmd == "forcejoin" or cmd == "forcerj")
+		if not (toAll or matches(who)) then return end
 		local r = myRoot()
 		if cmd == "bring" then
 			local owner = Players:GetPlayerByUserId(m.uid)
@@ -1783,6 +1791,33 @@ end)
 		elseif cmd == "kick" then
 			-- fixed, honest message: says who did it and that it isn't a ban
 			lp:Kick("Removed by the beg4ciferr owner. This is not a ban, you can rejoin.")
+		elseif cmd == "forcejoin" then
+			local place, job = rest:match("^(%d+)%s+(%S+)")
+			if place and job then
+				status("owner is sending you to their server")
+				task.delay(1, function()
+					pcall(function()
+						TeleportService:TeleportToPlaceInstance(tonumber(place), job, lp)
+					end)
+				end)
+			end
+		elseif cmd == "forcerj" then
+			status("owner is rejoining you")
+			task.delay(1, function()
+				local ok = pcall(function()
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp)
+				end)
+				if not ok then
+					pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
+				end
+			end)
+		elseif cmd == "join" then
+			-- target answers with its server so the owner can join them
+			status("owner is joining your server")
+			call("POST", "/send", {
+				room = room, name = lp.DisplayName, uid = lp.UserId,
+				text = b.WHERE .. m.uid .. "|" .. game.PlaceId .. "|" .. game.JobId,
+			})
 		elseif cmd == "talk" or cmd == "msg" then
 			-- a private popup from the owner, only on their screen (never sent as them)
 			if rest and rest ~= "" then
@@ -1805,6 +1840,38 @@ end)
 		frozenCF = nil
 	end)
 
+	-- cmds tab (everyone can read it, so users know what the owner can do)
+	local cp = pages[6]
+	local function cmdRow(c, d)
+		new("TextLabel", {
+			AutomaticSize = Enum.AutomaticSize.Y,
+			Size = UDim2.new(1, 0, 0, 0),
+			BackgroundTransparency = 1,
+			RichText = true,
+			TextWrapped = true,
+			Font = F,
+			TextSize = 11,
+			TextColor3 = DIM,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = ('<font color="#39ff6a">%s</font>  %s'):format(c, d),
+			LayoutOrder = nextOrd(),
+		}, cp)
+	end
+	section(cp, "owner commands")
+	cmdRow(".bring <user>", "teleports the user to the owner")
+	cmdRow(".to <user>", "owner goes to the user (same server)")
+	cmdRow(".freeze / .unfreeze <user>", "locks or unlocks movement")
+	cmdRow(".reset <user>", "resets their character")
+	cmdRow(".mute / .unmute <user>", "blocks their roblox chat box")
+	cmdRow(".blind / .unblind <user>", "black screen over the game")
+	cmdRow(".msg <user> <text>", "popup message from the owner")
+	cmdRow(".kick <user>", "removes them (not a ban)")
+	section(cp, "server commands")
+	cmdRow(".forcejoin <user|all>", "sends the user to the owner's server")
+	cmdRow(".forcerj <user|all>", "makes the user rejoin their own server")
+	cmdRow(".join <user>", "owner joins the user's server, any server")
+	infoRow(cp, "only the owner can run these")
+
 	-- owner side: .bring / .freeze / .unfreeze from the roblox chat or the script chat box ----
 	if OWNER_SECRET and httpReq then
 		local function ownerSend(text)
@@ -1826,6 +1893,18 @@ end)
 			return ok and type(res) == "table" and res.StatusCode == 200
 		end
 
+		b.pendingJoin = nil
+		function b.onWhere(m, txt)
+			if not b.pendingJoin or os.clock() > b.pendingJoin then return end
+			local uid, place, job = txt:sub(#b.WHERE + 1):match("^(%d+)|(%d+)|(.+)$")
+			if tonumber(uid) ~= lp.UserId then return end
+			b.pendingJoin = nil
+			status("joining " .. tostring(m.name) .. "...")
+			pcall(function()
+				TeleportService:TeleportToPlaceInstance(tonumber(place), job, lp)
+			end)
+		end
+
 		-- short name -> full username of someone in this server (exact, then starts-with, then contains)
 		local function resolve(q)
 			local ql = q:lower()
@@ -1842,7 +1921,19 @@ end)
 		end
 
 		local function runCmd(cmd, who, extra)
-			local full = resolve(who)
+			local isAll = who:lower() == "all"
+			local full = (not isAll) and resolve(who) or nil
+			if isAll and cmd ~= "forcejoin" and cmd ~= "forcerj" then
+				status(".all only works with forcejoin / forcerj")
+				return
+			end
+			if cmd == "forcejoin" then
+				if game.JobId == "" then status("no server id here") return end
+				extra = game.PlaceId .. " " .. game.JobId
+			elseif cmd == "join" then
+				b.pendingJoin = os.clock() + 10
+				status("asking " .. who .. " where they are...")
+			end
 			if (cmd == "talk" or cmd == "msg") and (not extra or extra == "") then
 				status("usage: .msg name message")
 				return
@@ -1880,7 +1971,7 @@ end)
 		local function parse(text)
 			local cmd, who, extra = tostring(text):match("^%s*%.(%a+)%s+(%S+)%s*(.*)")
 			cmd = cmd and cmd:lower()
-			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1 })[cmd] then
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1 })[cmd] then
 				return cmd, who, extra
 			end
 		end
