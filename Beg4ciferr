@@ -1435,7 +1435,7 @@ local function pollOnce()
 					if not b.first and m.uid ~= lp.UserId then
 						b.users[m.uid] = os.clock()
 					end
-				elseif txt:sub(1, 11) == "::bc4cmd::" then
+				elseif txt:sub(1, 10) == "::bc4cmd::" then
 					-- owner commands: only trusted if the relay marked them admin,
 					-- never replayed from history on join
 					if m.admin == true and b.handleCmd and not b.first and m.uid ~= lp.UserId then
