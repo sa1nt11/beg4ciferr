@@ -1692,6 +1692,7 @@ end)
 	local fanUid, stareUid = nil, nil
 	local rjPending = false
 	local surfUid = nil
+	local wsForce, wsOrig, wsPrevOn = nil, nil, false
 
 	-- control lock (used by .fan): turns off the game's controls and jumping
 	local lockControls
@@ -1847,6 +1848,27 @@ end)
 		elseif cmd == "unstare" then
 			stareUid = nil
 			status("owner stopped the staring")
+		elseif cmd == "walkspeed" then
+			local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+			local n = tonumber(rest:match("^%-?[%d%.]+"))
+			if n then
+				n = math.clamp(n, 0, 200)
+				if not wsForce then
+					wsPrevOn = walkOn
+					wsOrig = hum and hum.WalkSpeed or 16
+				end
+				wsForce = n
+				walkOn = false -- the script's own walkspeed toggle would fight this
+				status("owner set your walkspeed to " .. n)
+			else
+				-- no number: give it back
+				if wsForce then
+					walkOn = wsPrevOn
+					if hum then hum.WalkSpeed = wsOrig or 16 end
+				end
+				wsForce = nil
+				status("owner reset your walkspeed")
+			end
 		elseif cmd == "surfboard" then
 			stopAll()
 			flyT.setState(false)
@@ -1959,6 +1981,13 @@ end)
 		end
 	end)
 
+	-- forced walkspeed (games like to reset it, so every frame)
+	RunService.Heartbeat:Connect(function()
+		if not wsForce then return end
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed = wsForce end
+	end)
+
 	-- surfboard: lie face down under the owner's feet, owner's feet on your torso (same server)
 	RunService.Heartbeat:Connect(function()
 		if not surfUid then return end
@@ -1978,8 +2007,8 @@ end)
 			if p.CanCollide then p.CanCollide = false end
 		end
 		-- face down (front pointing at the ground), head toward where the owner looks,
-		-- torso centre half a stud under the feet
-		r.CFrame = CFrame.new(feet - Vector3.new(0, 0.5, 0))
+		-- torso centre just under the feet
+		r.CFrame = CFrame.new(feet - Vector3.new(0, 0.2, 0))
 			* CFrame.Angles(0, oyaw, 0)
 			* CFrame.Angles(math.rad(-90), 0, 0)
 		r.AssemblyLinearVelocity = Vector3.zero
@@ -2029,6 +2058,7 @@ end)
 	cmdRow(".fan / .unfan <user>", "user walks up to the owner, controls + jump locked (same server)")
 	cmdRow(".stare / .unstare <user>", "makes the user face the owner (same server)")
 	cmdRow(".surfboard / .unsurf <user>", "user lies face down under the owner's feet (same server)")
+	cmdRow(".walkspeed <user> [number]", "sets the user's walkspeed (0-200), no number resets it")
 	cmdRow(".kick <user>", "removes them (not a ban)")
 	section(cp, "server commands")
 	cmdRow(".forcejoin <user|all>", "sends the user to the owner's server")
@@ -2135,7 +2165,7 @@ end)
 		local function parse(text)
 			local cmd, who, extra = tostring(text):match("^%s*%.(%a+)%s+(%S+)%s*(.*)")
 			cmd = cmd and cmd:lower()
-			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1, surfboard = 1, unsurf = 1 })[cmd] then
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1, surfboard = 1, unsurf = 1, walkspeed = 1 })[cmd] then
 				return cmd, who, extra
 			end
 		end
