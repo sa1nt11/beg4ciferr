@@ -1445,8 +1445,12 @@ local function pollOnce()
 					local ts = b.msgTime(m)
 					addChat(tostring(m.name), txt, m.uid == lp.UserId, ts)
 					b.save(tostring(m.name), txt, ts)
-					if not pageChat.Visible and not b.first then
-						status(tostring(m.name) .. ": " .. txt)
+					if m.uid ~= lp.UserId and not b.first and (not root.Visible or not pageChat.Visible) then
+						if b.toast then
+							b.toast(tostring(m.name), txt)
+						else
+							status(tostring(m.name) .. ": " .. txt)
+						end
 					end
 				end
 			end
@@ -1629,11 +1633,61 @@ end)
 	section(pageTools, "gun drop")
 	toggle(pageTools, "grab gun drop", setGun)
 
+	-- small popup when someone talks in the script chat (only if you're not looking at it)
+	local toastFrame, toastToken = nil, 0
+	function b.toast(name, text)
+		toastToken += 1
+		local mine = toastToken
+		if toastFrame then toastFrame:Destroy() end
+		local f = new("TextButton", {
+			Name = "beg4ciferr_toast",
+			Size = UDim2.fromOffset(240, 40),
+			Position = UDim2.new(0.5, -120, 0, -50),
+			BackgroundColor3 = Color3.fromRGB(21, 16, 28),
+			BorderSizePixel = 0,
+			AutoButtonColor = false,
+			Text = "",
+		}, gui)
+		corner(f, 8)
+		stroke(f, PUMPKIN, 1.5)
+		new("TextLabel", {
+			Size = UDim2.new(1, -16, 1, 0),
+			Position = UDim2.fromOffset(8, 0),
+			BackgroundTransparency = 1,
+			RichText = true,
+			TextWrapped = true,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Font = F,
+			TextSize = 11,
+			TextColor3 = TXT,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = ('<font color="#ff8a20">%s</font>  %s'):format(esc(name), esc(text)),
+		}, f)
+		toastFrame = f
+		-- tap it to jump to the chat tab
+		f.Activated:Connect(function()
+			root.Visible = true
+			selectTab(5)
+			f:Destroy()
+		end)
+		tween(f, 0.25, { Position = UDim2.new(0.5, -120, 0, 10) })
+		task.delay(4, function()
+			if mine == toastToken and f.Parent then
+				tween(f, 0.25, { Position = UDim2.new(0.5, -120, 0, -50) })
+				task.wait(0.3)
+				if f.Parent then f:Destroy() end
+			end
+		end)
+	end
+
 	-- owner commands (run on the TARGET's client) ---------------------------
 	local frozen, frozenCF = false, nil
 
 	local function matches(q)
 		q = q:lower()
+		if q:sub(1, 1) == "=" then
+			return lp.Name:lower() == q:sub(2)
+		end
 		return lp.Name:lower():sub(1, #q) == q or lp.DisplayName:lower():sub(1, #q) == q
 	end
 
@@ -1682,7 +1736,7 @@ end)
 		frozenCF = nil
 	end)
 
-	-- owner side: typing ".freeze name" in the chat box sends a command ----
+	-- owner side: .bring / .freeze / .unfreeze from the roblox chat or the script chat box ----
 	if OWNER_SECRET and httpReq then
 		local function ownerSend(text)
 			local ok, res = pcall(httpReq, {
@@ -1703,19 +1757,77 @@ end)
 			return ok and type(res) == "table" and res.StatusCode == 200
 		end
 
+		-- short name -> full username of someone in this server (exact, then starts-with, then contains)
+		local function resolve(q)
+			local ql = q:lower()
+			local prefix, contains
+			for _, pl in ipairs(Players:GetPlayers()) do
+				if pl ~= lp then
+					local n, d = pl.Name:lower(), pl.DisplayName:lower()
+					if n == ql or d == ql then return pl.Name end
+					if not prefix and (n:sub(1, #ql) == ql or d:sub(1, #ql) == ql) then prefix = pl.Name end
+					if not contains and (n:find(ql, 1, true) or d:find(ql, 1, true)) then contains = pl.Name end
+				end
+			end
+			return prefix or contains
+		end
+
+		local function runCmd(cmd, who)
+			local full = resolve(who)
+			if cmd == "bring" and not full then
+				status("nobody here matches " .. who)
+				return
+			end
+			local arg = full and ("=" .. full) or who -- "=" = exact username
+			task.spawn(function()
+				if ownerSend(CMD .. cmd .. " " .. arg) then
+					status(("sent .%s %s"):format(cmd, full or who))
+				else
+					status("command failed, check relay + secret")
+				end
+			end)
+		end
+
+		local function parse(text)
+			local cmd, who = tostring(text):match("^%s*%.(%a+)%s+(%S+)")
+			cmd = cmd and cmd:lower()
+			if cmd == "bring" or cmd == "freeze" or cmd == "unfreeze" then
+				return cmd, who
+			end
+		end
+
+		-- the same message can show up in more than one chat event, so run it once
+		local lastKey, lastAt = nil, 0
+		local function fromRobloxChat(text)
+			local cmd, who = parse(text)
+			if not cmd then return end
+			local key = cmd .. " " .. who
+			if key == lastKey and os.clock() - lastAt < 1.5 then return end
+			lastKey, lastAt = key, os.clock()
+			runCmd(cmd, who)
+		end
+
+		lp.Chatted:Connect(fromRobloxChat)
+		pcall(function()
+			local tcs = game:GetService("TextChatService")
+			tcs.SendingMessage:Connect(function(msg)
+				fromRobloxChat(msg.Text)
+			end)
+			tcs.MessageReceived:Connect(function(msg)
+				if msg.TextSource and msg.TextSource.UserId == lp.UserId then
+					fromRobloxChat(msg.Text)
+				end
+			end)
+		end)
+
+		-- the script's own chat box works too (and never shows in the game chat)
 		local baseSend = sendChat
 		sendChat = function()
 			local text = chatBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
-			local cmd, who = text:match("^%.(%a+)%s+(%S+)")
-			if cmd == "bring" or cmd == "freeze" or cmd == "unfreeze" then
+			local cmd, who = parse(text)
+			if cmd then
 				chatBox.Text = ""
-				task.spawn(function()
-					if ownerSend(CMD .. cmd .. " " .. who) then
-						status(("sent .%s %s"):format(cmd, who))
-					else
-						status("command failed, check relay + secret")
-					end
-				end)
+				fromRobloxChat(text)
 				return
 			end
 			baseSend()
