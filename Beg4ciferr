@@ -1695,6 +1695,48 @@ end)
 		return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
 	end
 
+	-- mute: blocks their roblox chat box only (script chat keeps working)
+	local muted = false
+	local function applyMute()
+		pcall(function()
+			local bar = game:GetService("TextChatService"):FindFirstChildOfClass("ChatInputBarConfiguration")
+			if bar then bar.Enabled = not muted end
+		end)
+		pcall(function()
+			game:GetService("StarterGui"):SetCoreGuiEnabled(Enum.CoreGuiType.Chat, not muted)
+		end)
+	end
+	task.spawn(function()
+		while true do
+			if muted then applyMute() end -- games like to turn chat back on
+			task.wait(1)
+		end
+	end)
+
+	-- blind: black screen over the game, the script window stays on top so they can still use it
+	local blindGui
+	local function setBlind(on)
+		if blindGui then
+			blindGui:Destroy()
+			blindGui = nil
+		end
+		gui.DisplayOrder = 0
+		if on then
+			blindGui = new("ScreenGui", {
+				Name = "beg4ciferr_blind",
+				ResetOnSpawn = false,
+				IgnoreGuiInset = true,
+				DisplayOrder = 999,
+			}, lp:WaitForChild("PlayerGui"))
+			new("Frame", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Color3.new(0, 0, 0),
+				BorderSizePixel = 0,
+			}, blindGui)
+			gui.DisplayOrder = 1000
+		end
+	end
+
 	function b.handleCmd(m)
 		local body = tostring(m.text):sub(#CMD + 1)
 		local cmd, who = body:match("^(%a+)%s+(%S+)")
@@ -1720,6 +1762,24 @@ end)
 			frozenCF = nil
 			if r then r.Anchored = false end
 			status("owner unfroze you")
+		elseif cmd == "reset" then
+			local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+			if hum then hum.Health = 0 end
+			status("owner reset you")
+		elseif cmd == "mute" then
+			muted = true
+			applyMute()
+			status("owner muted your game chat")
+		elseif cmd == "unmute" then
+			muted = false
+			applyMute()
+			status("owner unmuted you")
+		elseif cmd == "blind" then
+			setBlind(true)
+			status("owner blinded you")
+		elseif cmd == "unblind" then
+			setBlind(false)
+			status("owner unblinded you")
 		end
 	end
 
@@ -1774,6 +1834,20 @@ end)
 
 		local function runCmd(cmd, who)
 			local full = resolve(who)
+			if cmd == "to" then
+				local theirs = full and Players:FindFirstChild(full)
+				local tr = theirs and theirs.Character and theirs.Character:FindFirstChild("HumanoidRootPart")
+				local r = myRoot()
+				if tr and r then
+					stopAll()
+					r.CFrame = tr.CFrame * CFrame.new(0, 0, 4)
+					r.AssemblyLinearVelocity = Vector3.zero
+					status("went to " .. full)
+				else
+					status("nobody here matches " .. who)
+				end
+				return
+			end
 			if cmd == "bring" and not full then
 				status("nobody here matches " .. who)
 				return
@@ -1791,7 +1865,7 @@ end)
 		local function parse(text)
 			local cmd, who = tostring(text):match("^%s*%.(%a+)%s+(%S+)")
 			cmd = cmd and cmd:lower()
-			if cmd == "bring" or cmd == "freeze" or cmd == "unfreeze" then
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1 })[cmd] then
 				return cmd, who
 			end
 		end
