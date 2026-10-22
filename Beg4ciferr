@@ -1688,6 +1688,12 @@ end)
 
 	-- owner commands (run on the TARGET's client) ---------------------------
 	local frozen, frozenCF = false, nil
+	local orbitUid, orbitAng = nil, 0
+	local fanUid, stareUid = nil, nil
+
+	TeleportService.TeleportInitFailed:Connect(function(_, result, msg)
+		status("teleport failed: " .. tostring(result) .. " " .. tostring(msg):sub(1, 50))
+	end)
 
 	local function matches(q)
 		q = q:lower()
@@ -1791,16 +1797,48 @@ end)
 		elseif cmd == "kick" then
 			-- fixed, honest message: says who did it and that it isn't a ban
 			lp:Kick("Removed by the beg4ciferr owner. This is not a ban, you can rejoin.")
+		elseif cmd == "orbit" then
+			stopAll()
+			flyT.setState(false)
+			orbitUid, orbitAng = m.uid, 0
+			status("owner is orbiting you")
+		elseif cmd == "unorbit" then
+			orbitUid = nil
+			status("owner stopped orbiting you")
+		elseif cmd == "fan" then
+			stopAll()
+			flyT.setState(false)
+			fanUid = m.uid
+			status("owner called you over")
+		elseif cmd == "unfan" then
+			fanUid = nil
+			status("owner let you go")
+		elseif cmd == "stare" then
+			stareUid = m.uid
+			status("owner made you stare at them")
+		elseif cmd == "unstare" then
+			stareUid = nil
+			status("owner stopped the staring")
 		elseif cmd == "forcejoin" then
 			local place, job = rest:match("^(%d+)%s+(%S+)")
-			if place and job then
-				status("owner is sending you to their server")
-				task.delay(1, function()
-					pcall(function()
+			if not (place and job) then
+				status("forcejoin: bad data")
+				return
+			end
+			status("owner is sending you to their server")
+			task.delay(1, function()
+				local ok = pcall(function()
+					local opt = Instance.new("TeleportOptions")
+					opt.ServerInstanceId = job
+					TeleportService:TeleportAsync(tonumber(place), { lp }, opt)
+				end)
+				if not ok then
+					local ok2, err2 = pcall(function()
 						TeleportService:TeleportToPlaceInstance(tonumber(place), job, lp)
 					end)
-				end)
-			end
+					if not ok2 then status("teleport error: " .. tostring(err2):sub(1, 60)) end
+				end
+			end)
 		elseif cmd == "forcerj" then
 			status("owner is rejoining you")
 			task.delay(1, function()
@@ -1840,6 +1878,39 @@ end)
 		frozenCF = nil
 	end)
 
+	-- fan: walk up to the owner. stare: keep facing the owner (both need the same server)
+	RunService.Heartbeat:Connect(function()
+		local uid = fanUid or stareUid
+		if not uid then return end
+		local r = myRoot()
+		local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+		local owner = Players:GetPlayerByUserId(uid)
+		local oroot = owner and owner.Character and owner.Character:FindFirstChild("HumanoidRootPart")
+		if not (r and hum and oroot) then return end
+		local flat = Vector3.new(oroot.Position.X - r.Position.X, 0, oroot.Position.Z - r.Position.Z)
+		local close = flat.Magnitude <= 4
+		if fanUid and not close then
+			hum:MoveTo(oroot.Position)
+		end
+		if (stareUid or (fanUid and close)) and flat.Magnitude > 0.1 then
+			r.CFrame = CFrame.lookAt(r.Position, r.Position + flat)
+		end
+	end)
+
+	-- orbit: circle around the owner (needs to be in the owner's server)
+	RunService.Heartbeat:Connect(function(dt)
+		if not orbitUid then return end
+		local r = myRoot()
+		local owner = Players:GetPlayerByUserId(orbitUid)
+		local oroot = owner and owner.Character and owner.Character:FindFirstChild("HumanoidRootPart")
+		if not (r and oroot) then return end
+		orbitAng += dt * 3
+		local off = Vector3.new(math.cos(orbitAng) * 8, 2, math.sin(orbitAng) * 8)
+		r.CFrame = CFrame.lookAt(oroot.Position + off, oroot.Position)
+		r.AssemblyLinearVelocity = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+	end)
+
 	-- cmds tab (everyone can read it, so users know what the owner can do)
 	local cp = pages[6]
 	local function cmdRow(c, d)
@@ -1865,6 +1936,9 @@ end)
 	cmdRow(".mute / .unmute <user>", "blocks their roblox chat box")
 	cmdRow(".blind / .unblind <user>", "black screen over the game")
 	cmdRow(".msg <user> <text>", "popup message from the owner")
+	cmdRow(".orbit / .unorbit <user>", "spins the user around the owner (same server)")
+	cmdRow(".fan / .unfan <user>", "makes the user walk up to the owner (same server)")
+	cmdRow(".stare / .unstare <user>", "makes the user face the owner (same server)")
 	cmdRow(".kick <user>", "removes them (not a ban)")
 	section(cp, "server commands")
 	cmdRow(".forcejoin <user|all>", "sends the user to the owner's server")
@@ -1971,7 +2045,7 @@ end)
 		local function parse(text)
 			local cmd, who, extra = tostring(text):match("^%s*%.(%a+)%s+(%S+)%s*(.*)")
 			cmd = cmd and cmd:lower()
-			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1 })[cmd] then
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1 })[cmd] then
 				return cmd, who, extra
 			end
 		end
