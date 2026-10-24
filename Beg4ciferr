@@ -1,4 +1,4 @@
--- beg4ciferr · halloween edition
+-- beg4ciferr · v2 (compact dark UI)
 -- localscript, goes in StarterPlayerScripts
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -21,7 +21,7 @@ local DEPTH = 14               -- how far under the coin you cruise
 local NEAR = 3                 -- horizontal range where you rise to grab
 local BODY_HALF = 0.6          -- half thickness of you lying down
 local OVERLAP = 0.25           -- how far your back pokes into the coin
-local DWELL = 0.12             -- max hold on a coin (ends early when it vanishes)
+local DWELL = 0.2              -- max hold on a coin (ends early when it vanishes)
 local ARRIVE = 0.6
 local EASE = 14                -- bigger = brakes later
 local ACCEL = 14               -- bigger = snappier turns
@@ -33,8 +33,8 @@ local FLING_SPIN = 40
 local DANGER_DIST = 35         -- knife warning range (needs role esp on)
 local ESP_TEXT = 11
 
-local F_TITLE = Enum.Font.Michroma
-local F = Enum.Font.RobotoMono
+local F_TITLE = Enum.Font.GothamBold
+local F = Enum.Font.GothamMedium
 
 -- state -------------------------------------------------------------
 local speed = 40
@@ -60,21 +60,104 @@ local origMaxZoom = lp.CameraMaxZoomDistance
 -- toggles that other code needs to flip (filled in when the pages are built)
 local tpT, spinT, underT, flyT, brightT, spookyT
 
--- colors: black + green, with a little pumpkin orange + purple -------
-local GREEN = Color3.fromRGB(57, 255, 106)
-local GREEN_LIGHT = Color3.fromRGB(190, 255, 205)
-local GREEN_DARK = Color3.fromRGB(14, 70, 34)
-local PUMPKIN = Color3.fromRGB(255, 138, 32)
-local PURPLE = Color3.fromRGB(140, 80, 220)
+-- colors: deep navy-black with an aqua -> violet accent --------------
+local GREEN = Color3.fromRGB(88, 214, 255)        -- accent 1 (aqua)
+local GREEN_LIGHT = Color3.fromRGB(205, 238, 255)
+local GREEN_DARK = Color3.fromRGB(28, 56, 92)
+local PUMPKIN = Color3.fromRGB(164, 128, 255)     -- accent 2 (violet)
 
-local ROW = Color3.fromRGB(22, 19, 29)
-local ROW_HOVER = Color3.fromRGB(29, 25, 38)
-local ROW_ON = Color3.fromRGB(14, 40, 26)
-local LINE = Color3.fromRGB(42, 36, 54)
-local SW_OFF = Color3.fromRGB(48, 43, 60)
-local DIM = Color3.fromRGB(140, 150, 148)
-local TXT = Color3.fromRGB(222, 255, 232)
-local FLASH = Color3.fromRGB(24, 90, 48)
+-- all the new farm state/helpers live in this one table (the script is at lua's local limit)
+local FARM = {
+	VER = "2",         -- script version, the owner tab only reads toggles from the same version
+	bring = false,
+	nextLook = 0,
+	reg = {},          -- every toggle in creation order (the owner tab refers to them by number)
+	fails = setmetatable({}, { __mode = "k" }),
+	done = setmetatable({}, { __mode = "k" }),
+	had = setmetatable({}, { __mode = "k" }),
+}
+
+-- which toggles are on, as a short string for the presence ping: version|username|3,7,12
+function FARM.stateText()
+	local on = {}
+	for i, e in ipairs(FARM.reg) do
+		if e.t.on then on[#on + 1] = i end
+	end
+	return FARM.VER .. "|" .. lp.Name .. "|" .. table.concat(on, ",")
+end
+
+-- has someone already taken this coin? (stays true once it's seen, so we never go back to it)
+function FARM.collected(c, p)
+	if FARM.done[c] then return true end
+	local gone = false
+	if c:GetAttribute("Collected") == true or c:GetAttribute("collected") == true then
+		gone = true
+	elseif p.CanTouch == false then
+		gone = true
+	else
+		local h = FARM.had[c]
+		if not h then
+			h = {}
+			FARM.had[c] = h
+		end
+		-- the coin's model: if it was there and visible and now it's gone / faded, it's taken
+		local vis = c:FindFirstChild("CoinVisual")
+		if vis then
+			h.vis = true
+			if vis:IsA("BasePart") then
+				if vis.Transparency < 0.95 then
+					h.shown = true
+				elseif h.shown then
+					gone = true
+				end
+			end
+		elseif h.vis then
+			gone = true
+		end
+		-- same for the touch trigger (executors can see it)
+		if p:FindFirstChild("TouchInterest") then
+			h.touch = true
+		elseif h.touch then
+			gone = true
+		end
+	end
+	if gone then FARM.done[c] = true end
+	return gone
+end
+
+-- a coin only counts if it's still there, not already collected, touchable, with a real
+-- position, and not being skipped
+function FARM.valid(c)
+	if not c.Parent or not c:IsDescendantOf(workspace) then return false end
+	if FARM.done[c] then return false end
+	local t = ignored[c]
+	if t ~= nil and t > os.clock() then return false end
+	local p = c
+	if c:IsA("Model") then
+		p = c.PrimaryPart or c:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if not p then return false end
+	local pos = p.Position
+	if pos ~= pos or pos.Magnitude > 1e5 then return false end
+	if FARM.collected(c, p) then return false end
+	return true
+end
+
+-- couldn't grab it: skip it for a while (longer every time), never written off for good
+function FARM.skip(c)
+	local n = (FARM.fails[c] or 0) + 1
+	FARM.fails[c] = n
+	ignored[c] = os.clock() + math.min(IGNORE_TIME * n, 30)
+end
+
+local ROW = Color3.fromRGB(20, 22, 31)
+local ROW_HOVER = Color3.fromRGB(27, 30, 42)
+local ROW_ON = Color3.fromRGB(21, 33, 50)
+local LINE = Color3.fromRGB(37, 41, 56)
+local SW_OFF = Color3.fromRGB(52, 57, 76)
+local DIM = Color3.fromRGB(134, 143, 166)
+local TXT = Color3.fromRGB(232, 238, 252)
+local FLASH = Color3.fromRGB(38, 64, 96)
 
 local RED = Color3.fromRGB(255, 60, 60)
 local BLUE = Color3.fromRGB(60, 140, 255)
@@ -119,8 +202,8 @@ local function isMove(i)
 end
 
 -- window ------------------------------------------------------------
-local W, H = 390, 310
-local TOP, FOOT, SIDE = 34, 24, 86
+local W, H = 310, 240
+local TOP, FOOT, SIDE = 28, 20, 64
 
 local gui = new("ScreenGui", {
 	Name = "beg4ciferr",
@@ -138,18 +221,18 @@ local root = new("Frame", {
 }, gui)
 
 local shadow2 = new("Frame", {
-	Size = UDim2.new(1, 28, 1, 28),
-	Position = UDim2.fromOffset(-14, -8),
+	Size = UDim2.new(1, 24, 1, 24),
+	Position = UDim2.fromOffset(-12, -6),
 	BackgroundColor3 = Color3.new(0, 0, 0),
-	BackgroundTransparency = 0.86,
+	BackgroundTransparency = 0.88,
 	BorderSizePixel = 0,
 }, root)
-corner(shadow2, 22)
+corner(shadow2, 20)
 local shadow1 = new("Frame", {
-	Size = UDim2.new(1, 12, 1, 12),
-	Position = UDim2.fromOffset(-6, -2),
+	Size = UDim2.new(1, 10, 1, 10),
+	Position = UDim2.fromOffset(-5, -2),
 	BackgroundColor3 = Color3.new(0, 0, 0),
-	BackgroundTransparency = 0.7,
+	BackgroundTransparency = 0.72,
 	BorderSizePixel = 0,
 }, root)
 corner(shadow1, 14)
@@ -161,14 +244,14 @@ local frame = new("Frame", {
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
 }, root)
-corner(frame, 10)
+corner(frame, 12)
 new("UIGradient", {
 	Rotation = 90,
-	Color = ColorSequence.new(Color3.fromRGB(21, 16, 28), Color3.fromRGB(5, 4, 8)),
+	Color = ColorSequence.new(Color3.fromRGB(17, 19, 28), Color3.fromRGB(8, 9, 14)),
 }, frame)
 
--- outline: green with a pumpkin glow that sweeps around
-local outline = stroke(frame, Color3.new(1, 1, 1), 1.5)
+-- outline: aqua with a violet glow that sweeps around
+local outline = stroke(frame, Color3.new(1, 1, 1), 1.2)
 local outlineGrad = new("UIGradient", {
 	Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, GREEN),
@@ -182,30 +265,34 @@ TweenService:Create(outlineGrad, TweenInfo.new(5, Enum.EasingStyle.Linear, Enum.
 
 -- title bar (the whole bar is the drag handle)
 local bar = new("TextButton", {
-	Size = UDim2.new(1, -70, 0, TOP),
+	Size = UDim2.new(1, -56, 0, TOP),
 	BackgroundTransparency = 1,
 	Text = "",
 	AutoButtonColor = false,
 }, frame)
 
-new("TextLabel", {
-	Size = UDim2.fromOffset(24, TOP),
-	Position = UDim2.fromOffset(9, 0),
-	BackgroundTransparency = 1,
-	Text = "🎃",
-	TextSize = 16,
-	Font = F,
-}, frame)
+local TITLE_COLORS = ColorSequence.new(GREEN, PUMPKIN)
 
-local TITLE_COLORS = ColorSequence.new(PUMPKIN, GREEN)
+-- little gradient dot next to the title
+do
+	local dot = new("Frame", {
+		Size = UDim2.fromOffset(8, 8),
+		Position = UDim2.fromOffset(11, TOP / 2 - 4),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, frame)
+	corner(dot, 4)
+	new("UIGradient", { Color = TITLE_COLORS, Rotation = 45 }, dot)
+end
+
 local title = new("TextLabel", {
 	AutomaticSize = Enum.AutomaticSize.X,
 	Size = UDim2.new(0, 0, 0, TOP),
-	Position = UDim2.fromOffset(35, 0),
+	Position = UDim2.fromOffset(25, 0),
 	BackgroundTransparency = 1,
 	Text = "beg4ciferr_",
 	Font = F_TITLE,
-	TextSize = 13,
+	TextSize = 12,
 	TextColor3 = Color3.new(1, 1, 1),
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, frame)
@@ -213,24 +300,24 @@ local titleGrad = new("UIGradient", { Color = TITLE_COLORS }, title)
 
 local function topButton(text, x)
 	local b = new("TextButton", {
-		Size = UDim2.fromOffset(24, 20),
-		Position = UDim2.new(1, x, 0, 7),
+		Size = UDim2.fromOffset(20, 18),
+		Position = UDim2.new(1, x, 0, 5),
 		Text = text,
 		Font = F,
-		TextSize = 15,
+		TextSize = 13,
 		TextColor3 = DIM,
 		BackgroundColor3 = ROW,
 		BorderSizePixel = 0,
 		AutoButtonColor = false,
 	}, frame)
-	corner(b, 5)
+	corner(b, 9)
 	stroke(b, LINE, 1)
-	b.MouseEnter:Connect(function() tween(b, 0.1, { TextColor3 = PUMPKIN }) end)
+	b.MouseEnter:Connect(function() tween(b, 0.1, { TextColor3 = GREEN }) end)
 	b.MouseLeave:Connect(function() tween(b, 0.1, { TextColor3 = DIM }) end)
 	return b
 end
-local closeBtn = topButton("×", -32)
-local miniBtn = topButton("–", -60)
+local closeBtn = topButton("×", -26)
+local miniBtn = topButton("–", -50)
 
 new("Frame", {
 	Size = UDim2.new(1, 0, 0, 1),
@@ -250,7 +337,7 @@ local body = new("Frame", {
 new("Frame", {
 	Size = UDim2.new(0, SIDE, 1, -FOOT),
 	BackgroundColor3 = Color3.new(0, 0, 0),
-	BackgroundTransparency = 0.6,
+	BackgroundTransparency = 0.65,
 	BorderSizePixel = 0,
 }, body)
 new("Frame", {
@@ -264,27 +351,28 @@ local TAB_NAMES = { "farm", "move", "view", "tools", "chat", "cmds" }
 local tabBtns = {}
 for i, name in ipairs(TAB_NAMES) do
 	local t = new("TextButton", {
-		Size = UDim2.new(0, SIDE, 0, 32),
-		Position = UDim2.fromOffset(0, 8 + (i - 1) * 36),
+		Size = UDim2.new(0, SIDE, 0, 24),
+		Position = UDim2.fromOffset(0, 6 + (i - 1) * 26),
 		BackgroundTransparency = 1,
 		Text = name,
 		Font = F,
-		TextSize = 13,
+		TextSize = 11,
 		TextColor3 = DIM,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		AutoButtonColor = false,
 	}, body)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 16) }, t)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 14) }, t)
 	tabBtns[i] = t
 end
 
 local marker = new("Frame", {
-	Size = UDim2.fromOffset(3, 18),
-	Position = UDim2.fromOffset(0, 15),
-	BackgroundColor3 = PUMPKIN,
+	Size = UDim2.fromOffset(3, 14),
+	Position = UDim2.fromOffset(0, 11),
+	BackgroundColor3 = Color3.new(1, 1, 1),
 	BorderSizePixel = 0,
 }, body)
 corner(marker, 2)
+new("UIGradient", { Color = TITLE_COLORS, Rotation = 90 }, marker)
 
 -- pages are scrolling lists, so nothing overlaps and adding rows is easy
 local layoutOrder = 0
@@ -299,19 +387,19 @@ local function newPage()
 		Size = UDim2.new(1, -(SIDE + 1), 1, -FOOT),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		ScrollBarThickness = 3,
+		ScrollBarThickness = 2,
 		ScrollBarImageColor3 = PUMPKIN,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		Visible = false,
 	}, body)
-	new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, p)
 	new("UIPadding", {
-		PaddingTop = UDim.new(0, 8),
-		PaddingBottom = UDim.new(0, 8),
-		PaddingLeft = UDim.new(0, 8),
-		PaddingRight = UDim.new(0, 10),
+		PaddingTop = UDim.new(0, 6),
+		PaddingBottom = UDim.new(0, 6),
+		PaddingLeft = UDim.new(0, 6),
+		PaddingRight = UDim.new(0, 8),
 	}, p)
 	return p
 end
@@ -326,11 +414,11 @@ local pageChat = new("Frame", {
 	Visible = false,
 }, body)
 local chatLog = new("ScrollingFrame", {
-	Position = UDim2.fromOffset(8, 8),
-	Size = UDim2.new(1, -18, 1, -54),
+	Position = UDim2.fromOffset(6, 6),
+	Size = UDim2.new(1, -14, 1, -44),
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	ScrollBarThickness = 3,
+	ScrollBarThickness = 2,
 	ScrollBarImageColor3 = PUMPKIN,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	CanvasSize = UDim2.new(),
@@ -338,8 +426,8 @@ local chatLog = new("ScrollingFrame", {
 }, pageChat)
 new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, chatLog)
 local chatBox = new("TextBox", {
-	Size = UDim2.new(1, -86, 0, 30),
-	Position = UDim2.new(0, 8, 1, -38),
+	Size = UDim2.new(1, -76, 0, 26),
+	Position = UDim2.new(0, 6, 1, -32),
 	BackgroundColor3 = ROW,
 	BorderSizePixel = 0,
 	Text = "",
@@ -347,11 +435,11 @@ local chatBox = new("TextBox", {
 	PlaceholderColor3 = DIM,
 	TextColor3 = TXT,
 	Font = F,
-	TextSize = 12,
+	TextSize = 11,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	ClearTextOnFocus = false,
 }, pageChat)
-corner(chatBox, 6)
+corner(chatBox, 8)
 stroke(chatBox, LINE, 1)
 new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chatBox)
 
@@ -359,17 +447,24 @@ local pages = { pageFarm, pageMove, pageView, pageTools, pageChat }
 pages[#pages + 1] = newPage() -- pages[6] = cmds tab
 
 local function selectTab(n)
+	tabBtns.cur = n
 	for i, p in ipairs(pages) do
 		p.Visible = (i == n)
 	end
 	for i, t in ipairs(tabBtns) do
 		t.TextColor3 = (i == n) and GREEN_LIGHT or DIM
 	end
-	tween(marker, 0.18, { Position = UDim2.fromOffset(0, 15 + (n - 1) * 36) })
+	tween(marker, 0.18, { Position = UDim2.fromOffset(0, 11 + (n - 1) * 26) })
 end
 for i, t in ipairs(tabBtns) do
 	t.Activated:Connect(function()
 		selectTab(i)
+	end)
+	t.MouseEnter:Connect(function()
+		if tabBtns.cur ~= i then tween(t, 0.1, { TextColor3 = TXT }) end
+	end)
+	t.MouseLeave:Connect(function()
+		if tabBtns.cur ~= i then tween(t, 0.1, { TextColor3 = DIM }) end
 	end)
 end
 selectTab(1)
@@ -388,7 +483,7 @@ local function footText(x, w, align, color)
 		Position = UDim2.new(x, x == 0 and 10 or 0, 1, -FOOT + 2),
 		BackgroundTransparency = 1,
 		Font = F,
-		TextSize = 11,
+		TextSize = 10,
 		TextColor3 = color,
 		TextXAlignment = align,
 		TextTruncate = Enum.TextTruncate.AtEnd,
@@ -410,21 +505,22 @@ local function status(msg)
 	end)
 end
 
--- floating pumpkin: tap to show / hide the window, drag to move it
+-- floating button: tap to show / hide the window, drag to move it
 local pump = new("TextButton", {
-	Name = "pumpkin",
-	Size = UDim2.fromOffset(42, 42),
-	Position = UDim2.fromOffset(15, 15),
-	BackgroundColor3 = Color3.fromRGB(21, 16, 28),
-	Text = "🎃",
-	TextSize = 22,
-	Font = F,
+	Name = "launcher",
+	Size = UDim2.fromOffset(34, 34),
+	Position = UDim2.fromOffset(12, 12),
+	BackgroundColor3 = Color3.fromRGB(17, 19, 28),
+	Text = "b",
+	TextSize = 15,
+	TextColor3 = GREEN,
+	Font = F_TITLE,
 	AutoButtonColor = false,
 }, gui)
-corner(pump, 21)
-local pumpStroke = stroke(pump, PUMPKIN, 2)
+corner(pump, 17)
+local pumpStroke = stroke(pump, GREEN, 1.5)
 
--- drag (window + pumpkin), kept on screen
+-- drag (window + launcher), kept on screen
 local function clampPos(px, size)
 	local vp = gui.AbsoluteSize
 	return Vector2.new(
@@ -481,14 +577,18 @@ miniBtn.Activated:Connect(function()
 	tw:Play()
 end)
 
+-- little open animation
+root.Size = UDim2.fromOffset(W, 0)
+tween(root, 0.35, { Size = UDim2.fromOffset(W, H) })
+
 -- row builders ------------------------------------------------------
 local function section(page, text)
 	return new("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 14),
+		Size = UDim2.new(1, 0, 0, 12),
 		BackgroundTransparency = 1,
 		Text = text:upper(),
-		Font = F,
-		TextSize = 10,
+		Font = F_TITLE,
+		TextSize = 9,
 		TextColor3 = PUMPKIN,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		LayoutOrder = nextOrd(),
@@ -497,11 +597,11 @@ end
 
 local function infoRow(page, text)
 	return new("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 16),
+		Size = UDim2.new(1, 0, 0, 14),
 		BackgroundTransparency = 1,
 		Text = text,
 		Font = F,
-		TextSize = 11,
+		TextSize = 10,
 		TextColor3 = DIM,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		LayoutOrder = nextOrd(),
@@ -511,42 +611,43 @@ end
 -- row with a switch on the right. t.setState(on) also runs the callback.
 local function toggle(page, text, cb)
 	local row = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 30),
+		Size = UDim2.new(1, 0, 0, 26),
 		BackgroundColor3 = ROW,
 		BorderSizePixel = 0,
 		AutoButtonColor = false,
 		Text = "",
 		LayoutOrder = nextOrd(),
 	}, page)
-	corner(row, 6)
+	corner(row, 8)
 	local rs = stroke(row, LINE, 1)
 	local lbl = new("TextLabel", {
-		Size = UDim2.new(1, -54, 1, 0),
+		Size = UDim2.new(1, -46, 1, 0),
 		Position = UDim2.fromOffset(10, 0),
 		BackgroundTransparency = 1,
 		Text = text,
 		Font = F,
-		TextSize = 12,
+		TextSize = 11,
 		TextColor3 = DIM,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 	}, row)
 	local sw = new("Frame", {
-		Size = UDim2.fromOffset(32, 16),
-		Position = UDim2.new(1, -42, 0.5, -8),
+		Size = UDim2.fromOffset(26, 14),
+		Position = UDim2.new(1, -34, 0.5, -7),
 		BackgroundColor3 = SW_OFF,
 		BorderSizePixel = 0,
 	}, row)
-	corner(sw, 8)
+	corner(sw, 7)
 	local knob = new("Frame", {
-		Size = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(10, 10),
 		Position = UDim2.fromOffset(2, 2),
 		BackgroundColor3 = DIM,
 		BorderSizePixel = 0,
 	}, sw)
-	corner(knob, 6)
+	corner(knob, 5)
 
 	local t = { on = false }
+	FARM.reg[#FARM.reg + 1] = { name = text, t = t }
 	function t.set(on) -- visuals only
 		t.on = on
 		tween(row, 0.15, { BackgroundColor3 = on and ROW_ON or ROW })
@@ -554,7 +655,7 @@ local function toggle(page, text, cb)
 		tween(lbl, 0.15, { TextColor3 = on and TXT or DIM })
 		tween(sw, 0.15, { BackgroundColor3 = on and GREEN or SW_OFF })
 		tween(knob, 0.15, {
-			Position = on and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2),
+			Position = on and UDim2.fromOffset(14, 2) or UDim2.fromOffset(2, 2),
 			BackgroundColor3 = on and Color3.new(1, 1, 1) or DIM,
 		})
 	end
@@ -562,6 +663,7 @@ local function toggle(page, text, cb)
 		if t.on == on and not force then return end
 		t.set(on)
 		cb(on)
+		FARM.dirty = true
 	end
 	row.Activated:Connect(function()
 		t.setState(not t.on)
@@ -581,7 +683,7 @@ local function flash(b, base)
 end
 
 local function actionBtn(parent, text, size, pos, cb, danger)
-	local base = danger and Color3.fromRGB(46, 13, 17) or ROW
+	local base = danger and Color3.fromRGB(44, 14, 20) or ROW
 	local b = new("TextButton", {
 		Size = size,
 		Position = pos,
@@ -590,10 +692,10 @@ local function actionBtn(parent, text, size, pos, cb, danger)
 		AutoButtonColor = false,
 		Text = text,
 		Font = F,
-		TextSize = 12,
+		TextSize = 11,
 		TextColor3 = danger and Color3.fromRGB(255, 140, 140) or DIM,
 	}, parent)
-	corner(b, 6)
+	corner(b, 8)
 	stroke(b, danger and RED or LINE, 1)
 	b.Activated:Connect(function()
 		flash(b, base)
@@ -603,14 +705,14 @@ local function actionBtn(parent, text, size, pos, cb, danger)
 end
 
 local function fullAction(page, text, cb, danger)
-	local b = actionBtn(page, text, UDim2.new(1, 0, 0, 30), UDim2.new(), cb, danger)
+	local b = actionBtn(page, text, UDim2.new(1, 0, 0, 26), UDim2.new(), cb, danger)
 	b.LayoutOrder = nextOrd()
 	return b
 end
 
 local function pair(page, aText, aCb, bText, bCb)
 	local row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 30),
+		Size = UDim2.new(1, 0, 0, 26),
 		BackgroundTransparency = 1,
 		LayoutOrder = nextOrd(),
 	}, page)
@@ -624,55 +726,56 @@ local function slider(page, text, min, max, init, onChange)
 	local s = { value = init, page = page }
 
 	local row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 40),
+		Size = UDim2.new(1, 0, 0, 36),
 		BackgroundColor3 = ROW,
 		BorderSizePixel = 0,
 		LayoutOrder = nextOrd(),
 	}, page)
-	corner(row, 6)
+	corner(row, 8)
 	stroke(row, LINE, 1)
 
 	new("TextLabel", {
-		Size = UDim2.new(0.6, -10, 0, 16),
-		Position = UDim2.fromOffset(10, 4),
+		Size = UDim2.new(0.6, -10, 0, 14),
+		Position = UDim2.fromOffset(10, 3),
 		BackgroundTransparency = 1,
 		Text = text,
 		Font = F,
-		TextSize = 12,
+		TextSize = 11,
 		TextColor3 = DIM,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, row)
 	local val = new("TextLabel", {
-		Size = UDim2.new(0.4, -10, 0, 16),
-		Position = UDim2.new(0.6, 0, 0, 4),
+		Size = UDim2.new(0.4, -10, 0, 14),
+		Position = UDim2.new(0.6, 0, 0, 3),
 		BackgroundTransparency = 1,
-		Font = F,
-		TextSize = 12,
+		Font = F_TITLE,
+		TextSize = 11,
 		TextColor3 = GREEN,
 		TextXAlignment = Enum.TextXAlignment.Right,
 	}, row)
 
 	local area = new("Frame", {
-		Size = UDim2.new(1, -20, 0, 18),
-		Position = UDim2.fromOffset(10, 20),
+		Size = UDim2.new(1, -20, 0, 16),
+		Position = UDim2.fromOffset(10, 17),
 		BackgroundTransparency = 1,
 	}, row)
 	local track = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 4),
 		Position = UDim2.new(0, 0, 0.5, -2),
-		BackgroundColor3 = Color3.fromRGB(34, 30, 44),
+		BackgroundColor3 = Color3.fromRGB(34, 38, 52),
 		BorderSizePixel = 0,
 	}, area)
 	corner(track, 2)
-	local fill = new("Frame", { BackgroundColor3 = GREEN, BorderSizePixel = 0 }, track)
+	local fill = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, track)
 	corner(fill, 2)
+	new("UIGradient", { Color = TITLE_COLORS }, fill)
 	local knob = new("Frame", {
-		Size = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(10, 10),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = GREEN_LIGHT,
 		BorderSizePixel = 0,
 	}, area)
-	corner(knob, 6)
+	corner(knob, 5)
 	stroke(knob, GREEN, 2)
 
 	local function refresh()
@@ -714,7 +817,7 @@ UIS.InputEnded:Connect(function(i)
 	end
 end)
 
--- knife warning: title turns red (and the pumpkin ring too, so you see it when hidden)
+-- knife warning: title turns red (and the launcher ring too, so you see it when hidden)
 local dangerShown = false
 local function setDanger(d)
 	if d then
@@ -727,7 +830,7 @@ local function setDanger(d)
 	elseif dangerShown then
 		title.Text = "beg4ciferr_"
 		titleGrad.Color = TITLE_COLORS
-		pumpStroke.Color = PUMPKIN
+		pumpStroke.Color = GREEN
 		dangerShown = false
 	end
 end
@@ -789,7 +892,7 @@ end
 local function countLeft()
 	local n = 0
 	for c in pairs(coins) do
-		if c.Parent and not isIgnored(c) then
+		if FARM.valid(c) then
 			n += 1
 		end
 	end
@@ -806,7 +909,7 @@ end
 local function nearest(pos)
 	local best, bestD
 	for c in pairs(coins) do
-		if c.Parent and not isIgnored(c) then
+		if FARM.valid(c) then
 			local d = (posOf(c) - pos).Magnitude
 			if not bestD or d < bestD then
 				best, bestD = c, d
@@ -978,7 +1081,7 @@ local function makeEsp(pl, char, head)
 	esp[pl] = { char = char, hl = hl, bb = bb, tl = tl }
 end
 
--- lighting: fullbright and spooky sky share one saved copy of the originals
+-- lighting: fullbright and night sky share one saved copy of the originals
 local LIGHT_PROPS = { "Brightness", "ClockTime", "FogStart", "FogEnd", "FogColor", "Ambient", "OutdoorAmbient", "GlobalShadows" }
 local lightSaved, grade
 local function applyLight()
@@ -1000,7 +1103,7 @@ local function applyLight()
 		Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
 		Lighting.GlobalShadows = false
 	elseif spookyOn then
-		-- purple night + orange tint, still bright enough to see where you're going
+		-- purple night + warm tint, still bright enough to see where you're going
 		Lighting.Brightness = 1.5
 		Lighting.ClockTime = 0
 		Lighting.FogColor = Color3.fromRGB(38, 16, 52)
@@ -1088,9 +1191,62 @@ end
 -- pages -------------------------------------------------------------
 
 -- farm
+
+-- bring all: puts every other player in one tight group right in front of you.
+-- client side only, nobody else sees it
+function FARM.setBring(on)
+	FARM.bring = on
+	if FARM.beat then
+		FARM.beat:Disconnect()
+		FARM.beat = nil
+	end
+	if not on then
+		status("bring all off")
+		return
+	end
+	status("bring all on (only you see it)")
+	FARM.beat = RunService.Heartbeat:Connect(function()
+		local me = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+		if not me then return end
+		local list = {}
+		for _, pl in ipairs(Players:GetPlayers()) do
+			if pl ~= lp then
+				local hrp = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
+				if hrp then list[#list + 1] = hrp end
+			end
+		end
+		local n = #list
+		local cols = math.max(1, math.ceil(math.sqrt(n)))
+		local base = me.CFrame
+		local look = Vector3.new(me.Position.X, 0, me.Position.Z)
+		for i, hrp in ipairs(list) do
+			-- tight square-ish clump, centered right in front of you
+			local row = (i - 1) // cols
+			local col = (i - 1) % cols
+			local pos = (base * CFrame.new((col - (cols - 1) / 2) * 1.8, 0, -5 - row * 1.8)).Position
+			hrp.CFrame = CFrame.lookAt(pos, Vector3.new(look.X, pos.Y, look.Z))
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end
+	end)
+end
+
+-- runs twice a second: if coins exist but nothing has moved for 10s, clear the skip lists
+function FARM.tick()
+	if tpOn and FARM.progress and os.clock() - FARM.progress > 10 and countLeft() > 0 then
+		for k in pairs(ignored) do ignored[k] = nil end
+		for k in pairs(FARM.fails) do FARM.fails[k] = nil end
+		dropTarget()
+		vel = Vector3.zero
+		FARM.progress = os.clock()
+		status("farm was stuck, retrying")
+	end
+end
+
 section(pageFarm, "auto grab")
 tpT = toggle(pageFarm, "tp to coins", function(on)
 	tpOn = on
+	FARM.progress = os.clock()
 	dropTarget()
 	vel = Vector3.zero
 	if on and flyT and flyT.on then flyT.setState(false) end
@@ -1106,6 +1262,9 @@ end)
 underT = toggle(pageFarm, "go under", function(on)
 	underOn = on
 	if not on then surface() end
+end)
+FARM.bringT = toggle(pageFarm, "bring all players", function(on)
+	FARM.setBring(on)
 end)
 slider(pageFarm, "speed", MIN_SPEED, MAX_SPEED, speed, function(v)
 	speed = v
@@ -1215,7 +1374,7 @@ brightT = toggle(pageView, "fullbright", function(on)
 	end
 	applyLight()
 end)
-spookyT = toggle(pageView, "spooky sky", function(on)
+spookyT = toggle(pageView, "night sky", function(on)
 	spookyOn = on
 	if on and brightT.on then
 		brightOn = false
@@ -1304,6 +1463,7 @@ end)
 fullAction(pageTools, "panic", function()
 	stopAll()
 	flyT.setState(false)
+	if FARM.bringT then FARM.bringT.setState(false) end
 	status("stopped, you're above ground")
 end, true)
 
@@ -1334,7 +1494,7 @@ end
 
 local function addChat(name, text, mine, ts)
 	chatCount += 1
-	local when = ts and ('<font color="#8c9694">[%s]</font> '):format(os.date("%m/%d %H:%M:%S", ts)) or ""
+	local when = ts and ('<font color="#868fa6">[%s]</font> '):format(os.date("%m/%d %H:%M:%S", ts)) or ""
 	local l = new("TextLabel", {
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Size = UDim2.new(1, -4, 0, 0),
@@ -1342,12 +1502,12 @@ local function addChat(name, text, mine, ts)
 		RichText = true,
 		TextWrapped = true,
 		Font = F,
-		TextSize = 12,
+		TextSize = 11,
 		TextColor3 = TXT,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Top,
 		LayoutOrder = chatCount,
-		Text = ('%s<font color="%s">%s</font>  %s'):format(when, mine and "#39ff6a" or "#ff8a20", esc(name), esc(text)),
+		Text = ('%s<font color="%s">%s</font>  %s'):format(when, mine and "#58d6ff" or "#a480ff", esc(name), esc(text)),
 	}, chatLog)
 	chatRows[#chatRows + 1] = l
 	if #chatRows > 60 then
@@ -1383,7 +1543,7 @@ elseif RELAY_URL:find("your%-relay") then
 	relayReady = false
 	addChat("info", "set RELAY_URL and RELAY_KEY at the top of the chat section.", false)
 else
-	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt. the owner has commands that can move, freeze, mute, blind, kick, or teleport you to another server. see the cmds tab.", false)
+	addChat("info", "private chat. only people running this script in the same room see it. messages are saved with date + time to beg4ciferr_chat_log.txt. the owner has commands that can move, freeze, mute, blind, kick, or teleport you to another server. it can also see which toggles you have on and turn them off. see the cmds tab.", false)
 end
 
 -- everything new lives in chatRows.bc (a table), because the script is at lua's 200 local limit
@@ -1434,6 +1594,9 @@ local function pollOnce()
 				local b = chatRows.bc
 				local txt = tostring(m.text)
 				if txt:sub(1, #b.PRESENCE) == b.PRESENCE then
+					if b.onPresence and m.uid ~= lp.UserId then
+						b.onPresence(m, txt:sub(#b.PRESENCE + 1))
+					end
 					if not b.first and m.uid ~= lp.UserId then
 						b.users[m.uid] = os.clock()
 					end
@@ -1510,7 +1673,7 @@ sendChat = function()
 	end)
 end
 
-actionBtn(pageChat, "send", UDim2.fromOffset(70, 30), UDim2.new(1, -78, 1, -38), function()
+actionBtn(pageChat, "send", UDim2.fromOffset(62, 26), UDim2.new(1, -68, 1, -32), function()
 	sendChat()
 end)
 chatBox.FocusLost:Connect(function(enter)
@@ -1519,11 +1682,18 @@ end)
 
 task.spawn(function()
 	local b = chatRows.bc
+	local last = -1e9
 	while true do
-		if relayReady then
-			call("POST", "/send", { room = room, name = lp.DisplayName, uid = lp.UserId, text = b.PRESENCE })
+		-- announce every 20s, or right away when a toggle changed / the owner pinged
+		if relayReady and (FARM.dirty or os.clock() - last >= b.PRESENCE_EVERY) then
+			FARM.dirty = false
+			last = os.clock()
+			call("POST", "/send", {
+				room = room, name = lp.DisplayName, uid = lp.UserId,
+				text = b.PRESENCE .. FARM.stateText(),
+			})
 		end
-		task.wait(b.PRESENCE_EVERY)
+		task.wait(2)
 	end
 end)
 
@@ -1647,15 +1817,15 @@ end)
 		if toastFrame then toastFrame:Destroy() end
 		local f = new("TextButton", {
 			Name = "beg4ciferr_toast",
-			Size = UDim2.fromOffset(240, 40),
-			Position = UDim2.new(0.5, -120, 0, -50),
-			BackgroundColor3 = Color3.fromRGB(21, 16, 28),
+			Size = UDim2.fromOffset(230, 36),
+			Position = UDim2.new(0.5, -115, 0, -46),
+			BackgroundColor3 = Color3.fromRGB(17, 19, 28),
 			BorderSizePixel = 0,
 			AutoButtonColor = false,
 			Text = "",
 		}, gui)
-		corner(f, 8)
-		stroke(f, PUMPKIN, 1.5)
+		corner(f, 10)
+		stroke(f, PUMPKIN, 1.2)
 		new("TextLabel", {
 			Size = UDim2.new(1, -16, 1, 0),
 			Position = UDim2.fromOffset(8, 0),
@@ -1667,7 +1837,7 @@ end)
 			TextSize = 11,
 			TextColor3 = TXT,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			Text = ('<font color="#ff8a20">%s</font>  %s'):format(esc(name), esc(text)),
+			Text = ('<font color="#a480ff">%s</font>  %s'):format(esc(name), esc(text)),
 		}, f)
 		toastFrame = f
 		-- tap it to jump to the chat tab
@@ -1676,10 +1846,10 @@ end)
 			selectTab(5)
 			f:Destroy()
 		end)
-		tween(f, 0.25, { Position = UDim2.new(0.5, -120, 0, 10) })
+		tween(f, 0.25, { Position = UDim2.new(0.5, -115, 0, 10) })
 		task.delay(4, function()
 			if mine == toastToken and f.Parent then
-				tween(f, 0.25, { Position = UDim2.new(0.5, -120, 0, -50) })
+				tween(f, 0.25, { Position = UDim2.new(0.5, -115, 0, -46) })
 				task.wait(0.3)
 				if f.Parent then f:Destroy() end
 			end
@@ -1780,7 +1950,7 @@ end)
 		local body = tostring(m.text):sub(#CMD + 1)
 		local cmd, who, rest = body:match("^(%a+)%s+(%S+)%s*(.*)")
 		if not cmd then return end
-		local toAll = who:lower() == "all" and (cmd == "forcejoin" or cmd == "forcerj")
+		local toAll = who:lower() == "all" and (cmd == "forcejoin" or cmd == "forcerj" or cmd == "ping")
 		if not (toAll or matches(who)) then return end
 		local r = myRoot()
 		if cmd == "bring" then
@@ -1928,6 +2098,22 @@ end)
 				room = room, name = lp.DisplayName, uid = lp.UserId,
 				text = b.WHERE .. m.uid .. "|" .. game.PlaceId .. "|" .. game.JobId,
 			})
+		elseif cmd == "ping" then
+			-- owner wants a fresh list of who's here: announce right away
+			FARM.dirty = true
+		elseif cmd == "off" then
+			-- owner turns off one of your toggles (by number) or all of them
+			local n = tonumber(rest:match("^(%d+)"))
+			if rest:match("^all") then
+				for _, e in ipairs(FARM.reg) do
+					if e.t.on then e.t.setState(false) end
+				end
+				status("owner turned everything off")
+			elseif n and FARM.reg[n] then
+				local e = FARM.reg[n]
+				if e.t.on then e.t.setState(false) end
+				status("owner turned off " .. e.name)
+			end
 		elseif cmd == "talk" or cmd == "msg" then
 			-- a private popup from the owner, only on their screen (never sent as them)
 			if rest and rest ~= "" then
@@ -2039,10 +2225,10 @@ end)
 			RichText = true,
 			TextWrapped = true,
 			Font = F,
-			TextSize = 11,
+			TextSize = 10,
 			TextColor3 = DIM,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			Text = ('<font color="#39ff6a">%s</font>  %s'):format(c, d),
+			Text = ('<font color="#58d6ff">%s</font>  %s'):format(c, d),
 			LayoutOrder = nextOrd(),
 		}, cp)
 	end
@@ -2059,11 +2245,15 @@ end)
 	cmdRow(".stare / .unstare <user>", "makes the user face the owner (same server)")
 	cmdRow(".surfboard / .unsurf <user>", "user lies face down under the owner's feet (same server)")
 	cmdRow(".walkspeed <user> [number]", "sets the user's walkspeed (0-200), no number resets it")
+	cmdRow(".off <user> <number|all>", "turns off one of your toggles, or all of them")
 	cmdRow(".kick <user>", "removes them (not a ban)")
 	section(cp, "server commands")
 	cmdRow(".forcejoin <user|all>", "sends the user to the owner's server")
 	cmdRow(".forcerj <user|all>", "makes the user rejoin their own server")
 	cmdRow(".join <user>", "owner joins the user's server, any server")
+	cmdRow(".ping all", "asks everyone running the script to check in")
+	section(cp, "what the owner sees")
+	cmdRow("who's here", "your name, and which toggles you have on")
 	infoRow(cp, "only the owner can run these")
 
 	-- owner side: .bring / .freeze / .unfreeze from the roblox chat or the script chat box ----
@@ -2117,7 +2307,7 @@ end)
 		local function runCmd(cmd, who, extra)
 			local isAll = who:lower() == "all"
 			local full = (not isAll) and resolve(who) or nil
-			if isAll and cmd ~= "forcejoin" and cmd ~= "forcerj" then
+			if isAll and cmd ~= "forcejoin" and cmd ~= "forcerj" and cmd ~= "ping" then
 				status(".all only works with forcejoin / forcerj")
 				return
 			end
@@ -2165,7 +2355,7 @@ end)
 		local function parse(text)
 			local cmd, who, extra = tostring(text):match("^%s*%.(%a+)%s+(%S+)%s*(.*)")
 			cmd = cmd and cmd:lower()
-			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1, surfboard = 1, unsurf = 1, walkspeed = 1 })[cmd] then
+			if ({ bring = 1, freeze = 1, unfreeze = 1, reset = 1, mute = 1, unmute = 1, blind = 1, unblind = 1, to = 1, talk = 1, msg = 1, kick = 1, forcejoin = 1, forcerj = 1, join = 1, orbit = 1, unorbit = 1, fan = 1, unfan = 1, stare = 1, unstare = 1, surfboard = 1, unsurf = 1, walkspeed = 1, off = 1, ping = 1 })[cmd] then
 				return cmd, who, extra
 			end
 		end
@@ -2194,6 +2384,200 @@ end)
 			end)
 		end)
 
+		-- owner tab: who's running the script, what they have on, and switches to turn it off
+		do
+			b.states = {}
+			local ti = #tabBtns + 1
+			local tab = new("TextButton", {
+				Size = UDim2.new(0, SIDE, 0, 24),
+				Position = UDim2.fromOffset(0, 6 + (ti - 1) * 26),
+				BackgroundTransparency = 1,
+				Text = "owner",
+				Font = F,
+				TextSize = 11,
+				TextColor3 = DIM,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				AutoButtonColor = false,
+			}, body)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 14) }, tab)
+			tabBtns[ti] = tab
+			local op = newPage()
+			pages[ti] = op
+			tab.Activated:Connect(function() selectTab(ti) end)
+			tab.MouseEnter:Connect(function()
+				if tabBtns.cur ~= ti then tween(tab, 0.1, { TextColor3 = TXT }) end
+			end)
+			tab.MouseLeave:Connect(function()
+				if tabBtns.cur ~= ti then tween(tab, 0.1, { TextColor3 = DIM }) end
+			end)
+
+			-- presence from other people running the script
+			function b.onPresence(m, payload)
+				if os.time() - b.msgTime(m) > 70 then return end
+				local ver, user, list = payload:match("^([^|]*)|([^|]*)|(.*)$")
+				local st = { uid = m.uid, name = tostring(m.name), at = os.clock(), on = {} }
+				if user then
+					st.ver, st.user = ver, user
+					for n in list:gmatch("%d+") do
+						st.on[#st.on + 1] = tonumber(n)
+					end
+				end
+				b.states[m.uid] = st
+			end
+
+			section(op, "users running it")
+			local countLbl = infoRow(op, "0 online")
+			countLbl.TextColor3 = GREEN
+
+			pair(op, "refresh", function()
+				task.spawn(function() ownerSend(CMD .. "ping all") end)
+				status("asked everyone to check in")
+			end, "everyone off", function()
+				task.spawn(function()
+					local snap = {}
+					for _, st in pairs(b.states) do snap[#snap + 1] = st end
+					for _, st in ipairs(snap) do
+						if st.user and st.ver == FARM.VER and #st.on > 0 then
+							ownerSend(CMD .. "off =" .. st.user .. " all")
+							task.wait(0.3)
+						end
+					end
+				end)
+				status("turning everyone's toggles off")
+			end)
+
+			local list = new("Frame", {
+				Size = UDim2.new(1, 0, 0, 0),
+				AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundTransparency = 1,
+				LayoutOrder = nextOrd(),
+			}, op)
+			new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+
+			local sig = ""
+			local render
+
+			-- arg = toggle number, or "all"
+			local function off(st, arg)
+				task.spawn(function()
+					if ownerSend(CMD .. "off =" .. st.user .. " " .. arg) then
+						status(("turned off %s for %s"):format(arg, st.name))
+					else
+						status("command failed, check relay + secret")
+					end
+				end)
+				if arg == "all" then
+					st.on = {}
+				else
+					for i, v in ipairs(st.on) do
+						if v == tonumber(arg) then
+							table.remove(st.on, i)
+							break
+						end
+					end
+				end
+				sig = ""
+				render()
+			end
+
+			render = function()
+				local now = os.clock()
+				local rows = {}
+				for uid, st in pairs(b.states) do
+					if now - st.at < b.PRESENCE_TTL then
+						rows[#rows + 1] = st
+					else
+						b.states[uid] = nil
+					end
+				end
+				table.sort(rows, function(x, y) return x.name:lower() < y.name:lower() end)
+
+				local parts = {}
+				for _, st in ipairs(rows) do
+					parts[#parts + 1] = st.uid .. ":" .. tostring(st.ver) .. ":" .. table.concat(st.on, ",")
+				end
+				local newSig = table.concat(parts, ";")
+				countLbl.Text = #rows .. " online"
+				if newSig == sig then return end
+				sig = newSig
+
+				for _, ch in ipairs(list:GetChildren()) do
+					if not ch:IsA("UIListLayout") then ch:Destroy() end
+				end
+				for i, st in ipairs(rows) do
+					local n = #st.on
+					local same = st.ver == FARM.VER and st.user ~= nil
+					local card = new("Frame", {
+						Size = UDim2.new(1, 0, 0, 0),
+						AutomaticSize = Enum.AutomaticSize.Y,
+						BackgroundColor3 = ROW,
+						BorderSizePixel = 0,
+						LayoutOrder = i,
+					}, list)
+					corner(card, 8)
+					stroke(card, LINE, 1)
+					new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, card)
+					new("UIPadding", {
+						PaddingTop = UDim.new(0, 5),
+						PaddingBottom = UDim.new(0, 5),
+						PaddingLeft = UDim.new(0, 8),
+						PaddingRight = UDim.new(0, 8),
+					}, card)
+					local sub = (not same) and "other version" or (n == 0 and "nothing on" or (n .. " on"))
+					new("TextLabel", {
+						Size = UDim2.new(1, 0, 0, 14),
+						BackgroundTransparency = 1,
+						Text = st.name .. "  ·  " .. sub,
+						Font = F,
+						TextSize = 11,
+						TextColor3 = n > 0 and TXT or DIM,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+						LayoutOrder = 1,
+					}, card)
+					if same and n > 0 then
+						local chips = new("Frame", {
+							Size = UDim2.new(1, 0, 0, 0),
+							AutomaticSize = Enum.AutomaticSize.Y,
+							BackgroundTransparency = 1,
+							LayoutOrder = 2,
+						}, card)
+						new("UIGridLayout", {
+							CellSize = UDim2.new(0.5, -3, 0, 20),
+							CellPadding = UDim2.fromOffset(6, 3),
+							SortOrder = Enum.SortOrder.LayoutOrder,
+						}, chips)
+						for k, idx in ipairs(st.on) do
+							local e = FARM.reg[idx]
+							if e then
+								local bt = actionBtn(chips, e.name .. " ×", UDim2.new(), UDim2.new(), function()
+									off(st, tostring(idx))
+								end)
+								bt.TextSize = 10
+								bt.TextTruncate = Enum.TextTruncate.AtEnd
+								bt.LayoutOrder = k
+							end
+						end
+						local ba = actionBtn(chips, "all off", UDim2.new(), UDim2.new(), function()
+							off(st, "all")
+						end, true)
+						ba.TextSize = 10
+						ba.LayoutOrder = 1000
+					end
+				end
+			end
+
+
+			task.spawn(function()
+				task.wait(1)
+				task.spawn(function() ownerSend(CMD .. "ping all") end)
+				while true do
+					render()
+					task.wait(1.5)
+				end
+			end)
+		end
+
 		-- the script's own chat box works too (and never shows in the game chat)
 		local baseSend = sendChat
 		sendChat = function()
@@ -2215,6 +2599,7 @@ task.spawn(function()
 		refreshMine()
 		if flingOn then refreshOthers() end
 		setLeft()
+		FARM.tick()
 		if namesOn then applyNames(true) end
 
 		local t = math.floor(workspace.DistributedGameTime)
@@ -2229,7 +2614,7 @@ end)
 task.spawn(function()
 	while true do
 		local t = math.floor(os.clock() - joined)
-		timeLabel.Text = ("👻 %d:%02d:%02d"):format(t // 3600, (t % 3600) // 60, t % 60)
+		timeLabel.Text = ("%d:%02d:%02d"):format(t // 3600, (t % 3600) // 60, t % 60)
 		task.wait(0.5)
 	end
 end)
@@ -2482,11 +2867,12 @@ RunService.PreSimulation:Connect(function(dt)
 					grabbed(target)
 				end
 				dropTarget()
-			elseif isIgnored(target) then
+			elseif not FARM.valid(target) then
+				-- can't see it anymore (skipped, untouchable, gone), don't go for it
 				dropTarget()
 			elseif os.clock() - targetAt > targetLimit then
 				-- stuck on this one, skip it
-				ignored[target] = os.clock() + IGNORE_TIME
+				FARM.skip(target)
 				dropTarget()
 			end
 		end
@@ -2500,14 +2886,26 @@ RunService.PreSimulation:Connect(function(dt)
 		end
 
 		if target then
+			-- every so often: is there a much closer coin than the one we're heading to?
+			if not dwellUntil and os.clock() >= FARM.nextLook then
+				FARM.nextLook = os.clock() + 0.3
+				local alt = nearest(pos)
+				if alt and alt ~= target and (posOf(alt) - pos).Magnitude < (posOf(target) - pos).Magnitude * 0.6 then
+					target, targetAt, rising = alt, os.clock(), false
+					targetLimit = 4 + ((posOf(alt) - pos).Magnitude / speed) * 2.5
+				end
+			end
 			local goal = goalFor(target, pos)
 			targetGoal = goal
+			FARM.progress = os.clock()
 
 			if dwellUntil then
 				-- sitting on the coin until the touch goes through
 				pos = goal
 				if os.clock() >= dwellUntil then
-					grabbed(target)
+					-- still here after the hold: didn't collect, skip it
+					FARM.skip(target)
+					setLeft()
 					dropTarget()
 				end
 			elseif (goal - pos).Magnitude <= ARRIVE then
